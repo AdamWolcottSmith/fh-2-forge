@@ -1,35 +1,42 @@
 /**
- * FH-2 SysEx communication layer.
+ * FH-2 SysEx communication layer (transports + .syx file I/O).
  *
- * STATUS: mock-only. The real byte-level message formats must be
- * reverse-engineered from the official tool (expertsleepersltd/FH-2_tools,
- * `fh2_config_tool.html`) before `encodeConfig`/`decodeConfig` are wired to
- * hardware. Every function below is shaped for the real implementation but
- * currently round-trips through an in-memory mock so the UI can be built
- * without a device.
+ * The wire protocol primitives live in `protocol.ts` (verified 1:1 against the
+ * official tool). The field-level config codec lives in `codec.ts`. This module
+ * ties them to a MIDI transport.
  *
- * Transport note: the browser path uses the Web MIDI API. A future Tauri build
- * will swap `MidiTransport` for a native backend with the same interface.
+ * Two transports share the `MidiTransport` interface:
+ *   - `MockTransport`   — in-memory, for development and tests (no hardware).
+ *   - `WebMidiTransport`— real device over the Web MIDI API.
+ * A future Tauri build adds a native transport behind the same interface.
  */
 import { createDefaultConfig } from '$lib/config/defaults';
 import type { FH2Config } from '$lib/types/fh2';
-
-/** Expert Sleepers manufacturer SysEx ID. @verify against the official tool. */
-export const EXPERT_SLEEPERS_SYSEX_ID = [0x00, 0x21, 0x27] as const;
+import { decodeConfig, encodeConfig } from './codec';
+import {
+	classifyMessage,
+	requestConfigMessage,
+	requestVersionMessage,
+	saveToFlashMessage
+} from './protocol';
 
 export type ConnectionState =
 	| { status: 'disconnected' }
 	| { status: 'connecting' }
 	| { status: 'mock' }
-	| { status: 'connected'; inputName: string; outputName: string; firmware?: number };
+	| { status: 'connected'; inputName: string; outputName: string; firmware?: string };
 
 export interface MidiTransport {
 	connect(): Promise<ConnectionState>;
 	disconnect(): Promise<void>;
-	requestVersion(): Promise<number>;
+	requestVersion(): Promise<string>;
 	requestConfig(): Promise<FH2Config>;
 	sendConfig(config: FH2Config): Promise<void>;
+	saveToFlash(): Promise<void>;
 }
+
+/** How long to wait for a device reply before giving up. */
+const REPLY_TIMEOUT_MS = 4000;
 
 // ---------------------------------------------------------------------------
 // Mock transport — used for development and tests
@@ -42,8 +49,8 @@ export class MockTransport implements MidiTransport {
 		return { status: 'mock' };
 	}
 	async disconnect(): Promise<void> {}
-	async requestVersion(): Promise<number> {
-		return this.stored.version;
+	async requestVersion(): Promise<string> {
+		return `mock fw (config v${this.stored.version})`;
 	}
 	async requestConfig(): Promise<FH2Config> {
 		return structuredClone(this.stored);
@@ -51,16 +58,21 @@ export class MockTransport implements MidiTransport {
 	async sendConfig(config: FH2Config): Promise<void> {
 		this.stored = structuredClone(config);
 	}
+	async saveToFlash(): Promise<void> {}
 }
 
 // ---------------------------------------------------------------------------
-// Web MIDI transport — skeleton, not yet feature-complete
+// Web MIDI transport
 // ---------------------------------------------------------------------------
 
 export class WebMidiTransport implements MidiTransport {
 	private access?: MIDIAccess;
 	private input?: MIDIInput;
 	private output?: MIDIOutput;
+
+	/** Resolvers for the in-flight request, keyed by expected reply kind. */
+	private pendingConfig?: (payload: Uint8Array) => void;
+	private pendingVersion?: (version: string) => void;
 
 	async connect(): Promise<ConnectionState> {
 		if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
@@ -73,28 +85,75 @@ export class WebMidiTransport implements MidiTransport {
 		}
 		this.input = input;
 		this.output = output;
+		this.input.onmidimessage = (e) => {
+			if (e.data) this.handleMessage(new Uint8Array(e.data));
+		};
 		return { status: 'connected', inputName: input.name ?? 'FH-2', outputName: output.name ?? 'FH-2' };
 	}
 
 	async disconnect(): Promise<void> {
+		if (this.input) this.input.onmidimessage = null;
 		this.input = undefined;
 		this.output = undefined;
 	}
 
-	async requestVersion(): Promise<number> {
-		throw new Error('Not implemented: requires reverse-engineered version request message.');
+	private handleMessage(data: Uint8Array): void {
+		const msg = classifyMessage(data);
+		if (!msg) return;
+		if (msg.kind === 'config' && this.pendingConfig) {
+			const resolve = this.pendingConfig;
+			this.pendingConfig = undefined;
+			resolve(msg.payload);
+		} else if (msg.kind === 'version' && this.pendingVersion) {
+			const resolve = this.pendingVersion;
+			this.pendingVersion = undefined;
+			resolve(msg.version);
+		}
+	}
+
+	private send(bytes: Uint8Array): void {
+		if (!this.output) throw new Error('Not connected to an FH-2.');
+		this.output.send(bytes);
+	}
+
+	async requestVersion(): Promise<string> {
+		const reply = new Promise<string>((resolve, reject) => {
+			this.pendingVersion = resolve;
+			setTimeout(() => {
+				if (this.pendingVersion) {
+					this.pendingVersion = undefined;
+					reject(new Error('Timed out waiting for version reply.'));
+				}
+			}, REPLY_TIMEOUT_MS);
+		});
+		this.send(requestVersionMessage());
+		return reply;
 	}
 
 	async requestConfig(): Promise<FH2Config> {
-		throw new Error('Not implemented: requires reverse-engineered config dump request.');
+		const reply = new Promise<Uint8Array>((resolve, reject) => {
+			this.pendingConfig = resolve;
+			setTimeout(() => {
+				if (this.pendingConfig) {
+					this.pendingConfig = undefined;
+					reject(new Error('Timed out waiting for config dump.'));
+				}
+			}, REPLY_TIMEOUT_MS);
+		});
+		this.send(requestConfigMessage());
+		return decodeConfig(await reply);
 	}
 
-	async sendConfig(_config: FH2Config): Promise<void> {
-		throw new Error('Not implemented: requires reverse-engineered config encoder.');
+	async sendConfig(config: FH2Config): Promise<void> {
+		this.send(encodeConfig(config));
+	}
+
+	async saveToFlash(): Promise<void> {
+		this.send(saveToFlashMessage());
 	}
 }
 
-/** Locate the FH-2's MIDI input/output ports by name heuristic. @verify name. */
+/** Locate the FH-2's MIDI input/output ports by name heuristic. */
 function findFH2(access: MIDIAccess): { input?: MIDIInput; output?: MIDIOutput } {
 	const matches = (name: string | null) => !!name && /fh-?2|expert\s*sleepers/i.test(name);
 	let input: MIDIInput | undefined;
@@ -105,51 +164,22 @@ function findFH2(access: MIDIAccess): { input?: MIDIInput; output?: MIDIOutput }
 }
 
 // ---------------------------------------------------------------------------
-// Codec — TODO: real implementation reverse-engineered from the official tool
+// .syx file import/export
 // ---------------------------------------------------------------------------
 
-/** Serialise a config into one or more SysEx messages. @todo real format. */
-export function encodeConfig(_config: FH2Config): Uint8Array[] {
-	throw new Error('encodeConfig: SysEx format not yet implemented.');
-}
-
-/** Parse a complete SysEx config dump back into an FH2Config. @todo real format. */
-export function decodeConfig(_messages: Uint8Array[]): FH2Config {
-	throw new Error('decodeConfig: SysEx format not yet implemented.');
-}
-
-/** Route a single incoming SysEx packet to the right decoder. @todo. */
-export function parseIncomingSysex(_data: Uint8Array): void {
-	// Will accumulate multi-packet dumps and emit a parsed FH2Config.
-}
-
-// ---------------------------------------------------------------------------
-// .syx file import/export (binary, round-trip with official tools)
-// ---------------------------------------------------------------------------
-
-/** Concatenate encoded SysEx messages into a single .syx byte blob. */
+/** Serialise a config to a complete `.syx` config-dump blob. */
 export function configToSyx(config: FH2Config): Uint8Array {
-	const messages = encodeConfig(config);
-	const total = messages.reduce((n, m) => n + m.length, 0);
-	const out = new Uint8Array(total);
-	let offset = 0;
-	for (const m of messages) {
-		out.set(m, offset);
-		offset += m.length;
-	}
-	return out;
+	return encodeConfig(config);
 }
 
-/** Split a .syx blob into individual SysEx messages (0xF0 ... 0xF7) and decode. */
+/** Parse a `.syx` config-dump blob back into a config. */
 export function syxToConfig(bytes: Uint8Array): FH2Config {
-	const messages: Uint8Array[] = [];
-	let start = -1;
-	for (let i = 0; i < bytes.length; i++) {
-		if (bytes[i] === 0xf0) start = i;
-		else if (bytes[i] === 0xf7 && start >= 0) {
-			messages.push(bytes.slice(start, i + 1));
-			start = -1;
-		}
-	}
-	return decodeConfig(messages);
+	return decodeConfig(extractConfigPayload(bytes));
+}
+
+/** Given a full config-dump message (F0..F7), return just the config payload. */
+export function extractConfigPayload(bytes: Uint8Array): Uint8Array {
+	const msg = classifyMessage(bytes);
+	if (msg?.kind === 'config') return msg.payload;
+	throw new Error('Not a valid FH-2 config dump (.syx) file.');
 }

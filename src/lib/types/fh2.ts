@@ -412,6 +412,14 @@ export interface FH2Config {
 	/** Firmware version this config targets (affects SysEx encoding). */
 	version: number;
 	name: string;
+	/**
+	 * Last-known raw config-dump payload (the 4144 bytes between the 8-byte
+	 * header and the trailing F7), if this config came from a device or `.syx`
+	 * file. The codec preserves any bytes the typed model does not yet cover, so
+	 * round-trips stay byte-perfect while the model is filled in section by
+	 * section. Cleared/absent for freshly-created configs.
+	 */
+	raw?: Uint8Array;
 	globals: Globals;
 	converters: MidiCvConverter[]; // up to 16
 	clocks: ClockGenerator[]; // up to 32

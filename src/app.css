@@ -1,0 +1,42 @@
+@import 'tailwindcss';
+
+/*
+ * FH-2 Forge — dark synth aesthetic.
+ * Theme tokens are exposed to Tailwind via @theme so utilities like
+ * `bg-surface`, `text-accent`, `border-edge` work throughout the app.
+ */
+@theme {
+	--color-bg: #0b0d10;
+	--color-surface: #14181d;
+	--color-surface-2: #1b2128;
+	--color-edge: #2a323c;
+	--color-muted: #8a96a3;
+	--color-text: #e6edf3;
+
+	--color-accent: #ff7a18; /* Expert Sleepers / eurorack amber */
+	--color-accent-2: #18b6ff; /* CV / clock blue */
+	--color-good: #3fb950;
+	--color-warn: #d29922;
+	--color-bad: #f85149;
+
+	--font-sans: 'Inter', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+}
+
+:root {
+	color-scheme: dark;
+}
+
+html,
+body {
+	background: var(--color-bg);
+	color: var(--color-text);
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+}
+
+/* Thin dark scrollbars to match the aesthetic */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-edge) transparent;
+}

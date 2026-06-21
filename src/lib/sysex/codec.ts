@@ -14,7 +14,7 @@
  * (see SYSEX_FORMAT.md), they move from "preserved" to "modeled".
  */
 import { createDefaultConfig } from '$lib/config/defaults';
-import type { FH2Config } from '$lib/types/fh2';
+import { FH2_LIMITS, type FH2Config, type MidiCvConverter } from '$lib/types/fh2';
 import {
 	CONFIG_DUMP_HEADER,
 	CONFIG_PAYLOAD_PAD,
@@ -29,9 +29,74 @@ const ADDENDUM_BYTES = 16 /* euc out */ + 16 /* euc off-out */ + 16; /* srr */
 export const PAYLOAD_LENGTH = CONFIG_PAYLOAD_PAD + ADDENDUM_BYTES;
 
 // --- field offsets within the payload (see SYSEX_FORMAT.md) -----------------
+// Offsets are derived from the official tool's cursor arithmetic.
 const OFF_VERSION = 0; // 4 bytes, LE int32
 const OFF_NAME = 4; // 16 bytes ASCII; cursor then advances 17
 const NAME_LENGTH = 16;
+const NAME_ADVANCE = 17;
+const GLOBALS_A_SIZE = 7; // not yet modeled (preserved via raw)
+const RANGES_SIZE = 64; // not yet modeled (preserved via raw)
+const OFF_MCV = OFF_NAME + NAME_ADVANCE + GLOBALS_A_SIZE + RANGES_SIZE; // 92
+const MCV_SIZE = 32;
+
+// --- MCV field table: byte order + transform, mirroring makeSysExMcv ---------
+type McvFieldKind = 'bool' | 'byte' | 'plus1';
+const MCV_FIELDS: ReadonlyArray<readonly [keyof MidiCvConverter, McvFieldKind]> = [
+	['enabled', 'bool'], // 0
+	['channel', 'plus1'], // 1  (wire = value−1)
+	['noteMin', 'byte'], // 2
+	['noteMax', 'byte'], // 3
+	['type', 'byte'], // 4
+	['polyphony', 'byte'], // 5
+	['bendDepth', 'byte'], // 6
+	['scheme', 'byte'], // 7
+	['ignoreSurplus', 'bool'], // 8
+	['gatedPressure', 'bool'], // 9
+	['sustain', 'byte'], // 10
+	['baseOutput', 'byte'], // 11
+	['stride', 'byte'], // 12
+	['lastMpeChannel', 'plus1'], // 13 (wire = value−1)
+	['pressure', 'bool'], // 14
+	['paraGate', 'bool'], // 15
+	['cvOutput', 'bool'], // 16
+	['gateOutput', 'bool'], // 17
+	['velGateOutput', 'bool'], // 18
+	['velOutput', 'byte'], // 19
+	['relVelOutput', 'byte'], // 20
+	['triggerOutput', 'bool'], // 21
+	['voicePressureOutput', 'bool'], // 22
+	['mpeYOutput', 'byte'], // 23
+	['envOutput', 'bool'], // 24
+	['baseGate', 'byte'], // 25
+	['monoRetrigger', 'bool'], // 26
+	['interruptGate', 'bool'], // 27
+	['envZeroStart', 'bool'], // 28
+	['bendDownDepth', 'byte'], // 29
+	['pitchBendOutput', 'byte'], // 30
+	['randomOutput', 'bool'] // 31
+];
+
+function encodeMcv(conv: MidiCvConverter, payload: Uint8Array, base: number): void {
+	MCV_FIELDS.forEach(([key, kind], i) => {
+		const v = conv[key];
+		let byte: number;
+		if (kind === 'bool') byte = v ? 1 : 0;
+		else if (kind === 'plus1') byte = ((v as number) - 1) & 0x7f;
+		else byte = (v as number) & 0x7f;
+		payload[base + i] = byte;
+	});
+}
+
+function decodeMcv(payload: Uint8Array, base: number, id: number): MidiCvConverter {
+	const conv = { id } as MidiCvConverter;
+	MCV_FIELDS.forEach(([key, kind], i) => {
+		const b = payload[base + i];
+		const value = kind === 'bool' ? b !== 0 : kind === 'plus1' ? b + 1 : b;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(conv as any)[key] = value;
+	});
+	return conv;
+}
 
 // ---------------------------------------------------------------------------
 // Encode
@@ -56,6 +121,12 @@ export function encodeConfig(config: FH2Config): Uint8Array {
 	// name (16 ASCII bytes, space-padded then truncated, matching the tool)
 	const name = (config.name + ' '.repeat(NAME_LENGTH)).substring(0, NAME_LENGTH);
 	for (let i = 0; i < NAME_LENGTH; i++) payload[OFF_NAME + i] = name.charCodeAt(i) & 0x7f;
+
+	// MCVs (16 × 32 bytes)
+	for (let i = 0; i < FH2_LIMITS.converters; i++) {
+		const conv = config.converters[i];
+		if (conv) encodeMcv(conv, payload, OFF_MCV + i * MCV_SIZE);
+	}
 
 	// TODO: overlay remaining modeled sections here as they gain coverage.
 
@@ -95,6 +166,11 @@ export function decodeConfig(input: Uint8Array): FH2Config {
 	config.version = version || CONFIG_VERSION;
 	// Preserve the full payload so unmodeled fields survive a re-encode.
 	config.raw = payload.slice();
+
+	// MCVs (16 × 32 bytes)
+	for (let i = 0; i < FH2_LIMITS.converters; i++) {
+		config.converters[i] = decodeMcv(payload, OFF_MCV + i * MCV_SIZE, i + 1);
+	}
 
 	// TODO: parse remaining modeled sections here as they gain coverage.
 

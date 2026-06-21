@@ -5,10 +5,10 @@
  */
 import {
 	FH2_LIMITS,
+	MCV_TYPE,
 	type ClockGenerator,
 	type DrumSequencer,
 	type DrumSequencerLane,
-	type EnvelopeSettings,
 	type EuclideanPattern,
 	type FH2Config,
 	type Globals,
@@ -17,8 +17,7 @@ import {
 	type NoteSequencerStep,
 	type OutputSettings,
 	type ShiftRegisterRandom,
-	type TriggerGenerator,
-	type VoiceModSource
+	type TriggerGenerator
 } from '$lib/types/fh2';
 
 /** The firmware revision this model currently targets. @verify */
@@ -31,40 +30,41 @@ function range<T>(count: number, make: (i: number) => T): T[] {
 	return Array.from({ length: count }, (_, i) => make(i));
 }
 
-function defaultEnvelope(): EnvelopeSettings {
-	return { enabled: false, attack: 0, decay: 64, sustain: 100, release: 32, velocityAmount: 0 };
-}
-
-function defaultModSource(): VoiceModSource {
-	return { enabled: false, amount: 0 };
-}
-
 export function defaultConverter(id: number): MidiCvConverter {
 	return {
 		id,
 		enabled: false,
-		port: 'usb',
-		channel: ((id % 16) + 1) as number,
+		channel: ((id - 1) % 16) + 1,
 		noteMin: 0,
 		noteMax: 127,
-		type: 'mono',
+		type: MCV_TYPE.MONO,
 		polyphony: 1,
-		allocationMode: 0,
-		baseOutput: 1,
-		baseGate: 1,
+		bendDepth: 2,
+		bendDownDepth: 2,
+		scheme: 0,
+		ignoreSurplus: false,
+		gatedPressure: false,
+		sustain: 0,
+		baseOutput: 0,
 		stride: 1,
-		bendRange: 2,
-		portamento: 0,
-		transpose: 0,
-		fineTune: 0,
-		envelope: defaultEnvelope(),
-		velocity: defaultModSource(),
-		aftertouch: defaultModSource(),
-		y: defaultModSource(),
-		sustainPedal: false,
+		lastMpeChannel: 16,
+		pressure: false,
+		paraGate: false,
+		cvOutput: true,
+		gateOutput: true,
+		velGateOutput: false,
+		velOutput: 0,
+		relVelOutput: 0,
+		triggerOutput: false,
+		voicePressureOutput: false,
+		mpeYOutput: 0,
+		envOutput: false,
+		baseGate: 0,
 		monoRetrigger: true,
 		interruptGate: false,
-		randomEnabled: false
+		envZeroStart: false,
+		pitchBendOutput: 0,
+		randomOutput: false
 	};
 }
 
@@ -192,7 +192,8 @@ export function createDefaultConfig(name = 'Untitled'): FH2Config {
 		version: TARGET_FIRMWARE,
 		name,
 		globals: defaultGlobals(),
-		converters: range(FH2_LIMITS.converters, defaultConverter),
+		// Converters are numbered 1..16 to match the device (decodeMcv sets id = i+1).
+		converters: range(FH2_LIMITS.converters, (i) => defaultConverter(i + 1)),
 		clocks: range(FH2_LIMITS.clocks, defaultClock),
 		triggers: range(FH2_LIMITS.triggers, defaultTrigger),
 		euclideans: range(FH2_LIMITS.euclideans, defaultEuclidean),

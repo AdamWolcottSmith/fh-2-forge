@@ -83,90 +83,102 @@ export interface Globals {
 }
 
 // ---------------------------------------------------------------------------
-// Envelope (shared by converters and elsewhere)
-// ---------------------------------------------------------------------------
-
-export interface EnvelopeSettings {
-	enabled: boolean;
-	/** Attack time, 0..127 device units. */
-	attack: number;
-	/** Decay time, 0..127. */
-	decay: number;
-	/** Sustain level, 0..127. */
-	sustain: number;
-	/** Release time, 0..127. */
-	release: number;
-	/** Velocity → envelope amount, 0..127. @verify */
-	velocityAmount: number;
-}
-
-// ---------------------------------------------------------------------------
 // MIDI/CV Converters (up to 16)
 // ---------------------------------------------------------------------------
+//
+// Modeled byte-for-byte against the official tool's `makeSysExMcv()` /
+// `parseMcv()` — 32 bytes per converter. See docs/SYSEX_FORMAT.md.
 
-/** Voice-allocation strategy for a converter. @verify exact set + encoding. */
-export type ConverterType = 'mono' | 'poly' | 'mpe' | 'unison' | 'cc' | 'velocity' | 'aftertouch';
+/** Converter type (byte 4). 0=Mono, 1=Poly, 2=MPE. */
+export const MCV_TYPE = { MONO: 0, POLY: 1, MPE: 2 } as const;
+export type McvType = (typeof MCV_TYPE)[keyof typeof MCV_TYPE];
+export const MCV_TYPE_LABELS = ['Mono', 'Poly', 'MPE'] as const;
 
-export interface MidiCvConverter {
-	id: number;
-	enabled: boolean;
-	port: MidiPort;
-	/** MIDI channel this converter listens on. */
-	channel: MidiChannel;
-	/** Note range gate (notes outside are ignored). */
-	noteMin: MidiNote;
-	noteMax: MidiNote;
-	type: ConverterType;
-	/** Number of voices for poly/unison/mpe (1..16 within output budget). */
-	polyphony: number;
-	/** Note-allocation mode (rotate / reuse / oldest / etc.). @verify encoding. */
-	allocationMode: number;
-
-	/** First output used for this converter's pitch CVs. 1..128. */
-	baseOutput: OutputIndex;
-	/** First output used for this converter's gates. 1..128. */
-	baseGate: OutputIndex;
-	/** Output spacing between successive voices. */
-	stride: number;
-
-	/** Pitch-bend range in semitones. */
-	bendRange: number;
-	/** Portamento/glide time, 0..127. */
-	portamento: number;
-	/** Transpose in semitones. */
-	transpose: number;
-	/** Fine tune, cents. @verify range. */
-	fineTune: number;
-
-	envelope: EnvelopeSettings;
-
-	/** Velocity CV output settings. */
-	velocity: VoiceModSource;
-	/** Channel/poly aftertouch CV output settings. */
-	aftertouch: VoiceModSource;
-	/** Mod wheel / "Y" CC CV output settings. */
-	y: VoiceModSource;
-
-	/** Hold gates while sustain pedal (CC64) is down. */
-	sustainPedal: boolean;
-	/** Retrigger envelope/gate on legato notes in mono mode. */
-	monoRetrigger: boolean;
-	/** Briefly drop the gate between consecutive notes ("interrupt gate"). */
-	interruptGate: boolean;
-	/** Emit a random CV per note-on. */
-	randomEnabled: boolean;
-}
+/** Voice-allocation scheme (byte 7). */
+export const MCV_SCHEME_LABELS = [
+	'Round robin',
+	'Lowest voice',
+	'Unison',
+	'Unison 2',
+	'Note range',
+	'Alternating',
+	'Random'
+] as const;
+export type McvScheme = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 /**
- * A modulation source (velocity, aftertouch, mod wheel, random) that can be
- * routed to a dedicated CV output. @verify field set against the official tool.
+ * One MIDI/CV converter. Field order here is documentary; the wire byte order
+ * is defined by the codec's MCV field table. Values are stored as the
+ * user-facing (1-based where the device uses 0-based) numbers; the codec applies
+ * the ±1 transforms. Boolean toggles map to 0/1 bytes.
+ *
+ * Several "output" fields (velOutput, relVelOutput, mpeYOutput, pitchBendOutput)
+ * hold an output/CC index where 0 = off.
  */
-export interface VoiceModSource {
+export interface MidiCvConverter {
+	/** 1..16, matches the device converter number. */
+	id: number;
 	enabled: boolean;
-	/** Output index this source drives, or 0/undefined for "use voice stride". */
-	output?: OutputIndex;
-	/** Output amount/scaling, 0..127. */
-	amount: number;
+	/** MIDI channel, 1..16 (stored on the wire as channel−1). */
+	channel: MidiChannel;
+	/** Note range gate (notes outside are ignored). 0..127. */
+	noteMin: MidiNote;
+	noteMax: MidiNote;
+	type: McvType;
+	/** Number of voices, 1..16 (voices). */
+	polyphony: number;
+	/** Pitch-bend up range, semitones. */
+	bendDepth: number;
+	/** Pitch-bend down range, semitones. */
+	bendDownDepth: number;
+	/** Voice-allocation scheme. */
+	scheme: McvScheme;
+	/** "Ignore surplus" — drop instead of steal voices when over polyphony. */
+	ignoreSurplus: boolean;
+	/** Gated channel-pressure (GA). */
+	gatedPressure: boolean;
+	/** Sustain (SUS). */
+	sustain: number;
+	/** First output for this converter's pitch CVs, 0-based (0..63). */
+	baseOutput: number;
+	/** Output spacing between successive voices, 1..32. */
+	stride: number;
+	/** Last MPE MIDI channel, 1-based (stored as value−1). */
+	lastMpeChannel: number;
+	/** Channel-pressure CV output (A). */
+	pressure: boolean;
+	/** Paraphonic gate (G). */
+	paraGate: boolean;
+	/** Pitch CV output enabled (VC). */
+	cvOutput: boolean;
+	/** Gate output enabled (VG). */
+	gateOutput: boolean;
+	/** Velocity-gated output (VVG). */
+	velGateOutput: boolean;
+	/** Velocity CV output/CC index, 0 = off (VV). */
+	velOutput: number;
+	/** Release-velocity output/CC index, 0 = off (VR). */
+	relVelOutput: number;
+	/** Trigger output enabled (VT). */
+	triggerOutput: boolean;
+	/** Per-voice pressure output (VP). */
+	voicePressureOutput: boolean;
+	/** MPE Y-axis output/CC index (VY). */
+	mpeYOutput: number;
+	/** Envelope output enabled (VE). */
+	envOutput: boolean;
+	/** Base gate output index; 0 or 64..127. */
+	baseGate: number;
+	/** Mono retrigger (MT). */
+	monoRetrigger: boolean;
+	/** Interrupt gate (IG). */
+	interruptGate: boolean;
+	/** Envelope zero-start (ZS). */
+	envZeroStart: boolean;
+	/** Pitch-bend CV output/CC index, 0 = off (PB). */
+	pitchBendOutput: number;
+	/** Random CV output enabled (VRND). */
+	randomOutput: boolean;
 }
 
 // ---------------------------------------------------------------------------

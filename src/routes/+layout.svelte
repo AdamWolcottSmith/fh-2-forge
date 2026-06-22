@@ -1,18 +1,22 @@
 <script lang="ts">
 	import '../app.css';
+	import { page } from '$app/state';
 	import ConnectionBar from '$lib/components/ConnectionBar.svelte';
 
 	let { children } = $props();
 
-	// Top-level navigation. Routes are stubbed in Phase 1 and filled in per the
-	// roadmap in README.md.
+	const isActive = (href: string) =>
+		href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);
+
 	const nav = [
 		{ href: '/', label: 'Dashboard' },
 		{ href: '/converters', label: 'MIDI/CV Converters' },
-		{ href: '/euclidean', label: 'Euclidean & Sequencers' },
-		{ href: '/outputs', label: 'Outputs & Expanders' },
-		{ href: '/advanced', label: 'Clocks, Triggers & Advanced' },
-		{ href: '/library', label: 'Library' }
+		{ href: '/globals', label: 'Globals' },
+		{ href: '/clocks', label: 'Clocks' },
+		{ href: '/triggers', label: 'Triggers' },
+		{ href: '/euclidean', label: 'Euclidean' },
+		{ href: '/sequencers', label: 'Sequencers' },
+		{ href: '/outputs', label: 'Outputs' }
 	];
 </script>
 
@@ -31,7 +35,8 @@
 				{#each nav as item (item.href)}
 					<a
 						href={item.href}
-						class="rounded px-3 py-2 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-text"
+						class="rounded px-3 py-2 text-sm transition-colors hover:bg-surface-2 hover:text-text
+							{isActive(item.href) ? 'bg-surface-2 font-medium text-accent' : 'text-muted'}"
 					>
 						{item.label}
 					</a>

@@ -14,12 +14,23 @@
  * (see SYSEX_FORMAT.md), they move from "preserved" to "modeled".
  */
 import { createDefaultConfig } from '$lib/config/defaults';
-import { FH2_LIMITS, type FH2Config, type MidiCvConverter } from '$lib/types/fh2';
 import {
+	FH2_LIMITS,
+	OUTPUT_COUNT,
+	type FH2Config,
+	type Globals,
+	type MidiCvConverter
+} from '$lib/types/fh2';
+import {
+	bytesToShort,
 	CONFIG_DUMP_HEADER,
 	CONFIG_PAYLOAD_PAD,
 	CONFIG_VERSION,
-	isConfigDumpFile
+	isConfigDumpFile,
+	sysexSafeShort,
+	sysexSafeSignedChar,
+	unSysexSafeShort,
+	unSysexSafeSignedChar
 } from './protocol';
 
 /** Bytes of addendum (high-bits) appended after the 4096-byte padded body. */
@@ -33,15 +44,53 @@ export const PAYLOAD_LENGTH = CONFIG_PAYLOAD_PAD + ADDENDUM_BYTES;
 const OFF_VERSION = 0; // 4 bytes, LE int32
 const OFF_NAME = 4; // 16 bytes ASCII; cursor then advances 17
 const NAME_LENGTH = 16;
-const NAME_ADVANCE = 17;
-const GLOBALS_A_SIZE = 7; // not yet modeled (preserved via raw)
-const RANGES_SIZE = 64; // not yet modeled (preserved via raw)
-const OFF_MCV = OFF_NAME + NAME_ADVANCE + GLOBALS_A_SIZE + RANGES_SIZE; // 92
+const OFF_GLOBALS_A = 21; // 7 bytes
+const OFF_RANGES = 28; // 64 bytes
+const OFF_MCV = 92; // 16 × 32 bytes
 const MCV_SIZE = 32;
+const OFF_GATE_LEVELS = 2396; // 64 × 4 bytes (lo short, hi short)
+const OFF_GLOBALS_B = 2924; // 8 bytes (7 used + pad)
+const OFF_GLOBALS_C = 3604; // 4 bytes (2 used + pad)
 
-// --- MCV field table: byte order + transform, mirroring makeSysExMcv ---------
-type McvFieldKind = 'bool' | 'byte' | 'plus1';
-const MCV_FIELDS: ReadonlyArray<readonly [keyof MidiCvConverter, McvFieldKind]> = [
+// --- generic field-table codec ---------------------------------------------
+// Each section is a table of [key, kind]; encode/decode walk it symmetrically so
+// the two directions can never drift.
+type FieldKind = 'bool' | 'byte' | 'plus1' | 'signed';
+
+function encodeFields<T>(
+	obj: T,
+	fields: ReadonlyArray<readonly [keyof T, FieldKind]>,
+	payload: Uint8Array,
+	base: number
+): void {
+	fields.forEach(([key, kind], i) => {
+		const v = obj[key];
+		let byte: number;
+		if (kind === 'bool') byte = v ? 1 : 0;
+		else if (kind === 'plus1') byte = ((v as number) - 1) & 0x7f;
+		else if (kind === 'signed') byte = sysexSafeSignedChar(v as number);
+		else byte = (v as number) & 0x7f;
+		payload[base + i] = byte;
+	});
+}
+
+function decodeFields<T>(
+	target: T,
+	fields: ReadonlyArray<readonly [keyof T, FieldKind]>,
+	payload: Uint8Array,
+	base: number
+): void {
+	fields.forEach(([key, kind], i) => {
+		const b = payload[base + i];
+		const value =
+			kind === 'bool' ? b !== 0 : kind === 'plus1' ? b + 1 : kind === 'signed' ? unSysexSafeSignedChar(b) : b;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(target as any)[key] = value;
+	});
+}
+
+// --- MCV (16 × 32 bytes), mirroring makeSysExMcv ----------------------------
+const MCV_FIELDS: ReadonlyArray<readonly [keyof MidiCvConverter, FieldKind]> = [
 	['enabled', 'bool'], // 0
 	['channel', 'plus1'], // 1  (wire = value−1)
 	['noteMin', 'byte'], // 2
@@ -76,27 +125,31 @@ const MCV_FIELDS: ReadonlyArray<readonly [keyof MidiCvConverter, McvFieldKind]> 
 	['randomOutput', 'bool'] // 31
 ];
 
-function encodeMcv(conv: MidiCvConverter, payload: Uint8Array, base: number): void {
-	MCV_FIELDS.forEach(([key, kind], i) => {
-		const v = conv[key];
-		let byte: number;
-		if (kind === 'bool') byte = v ? 1 : 0;
-		else if (kind === 'plus1') byte = ((v as number) - 1) & 0x7f;
-		else byte = (v as number) & 0x7f;
-		payload[base + i] = byte;
-	});
-}
-
-function decodeMcv(payload: Uint8Array, base: number, id: number): MidiCvConverter {
-	const conv = { id } as MidiCvConverter;
-	MCV_FIELDS.forEach(([key, kind], i) => {
-		const b = payload[base + i];
-		const value = kind === 'bool' ? b !== 0 : kind === 'plus1' ? b + 1 : b;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		(conv as any)[key] = value;
-	});
-	return conv;
-}
+// --- Globals, split across three regions ------------------------------------
+const GLOBALS_A_FIELDS: ReadonlyArray<readonly [keyof Globals, FieldKind]> = [
+	['triggerLength', 'byte'],
+	['transpose', 'signed'],
+	['legatoVelocity', 'bool'],
+	['extClockMultiplier', 'byte'],
+	['extClockRun', 'byte'],
+	['presetProgramChange', 'byte'],
+	['softTakeover', 'bool']
+];
+const GLOBALS_B_FIELDS: ReadonlyArray<readonly [keyof Globals, FieldKind]> = [
+	['tapType', 'byte'],
+	['tapChannel', 'byte'],
+	['tapCC', 'byte'],
+	['euclideanAccent', 'byte'],
+	['startType', 'byte'],
+	['startChannel', 'byte'],
+	['startCC', 'byte']
+	// byte 7 is padding — preserved via raw
+];
+const GLOBALS_C_FIELDS: ReadonlyArray<readonly [keyof Globals, FieldKind]> = [
+	['tempoMin', 'byte'],
+	['tempoMax', 'byte']
+	// bytes 2,3 are padding — preserved via raw
+];
 
 // ---------------------------------------------------------------------------
 // Encode
@@ -122,10 +175,32 @@ export function encodeConfig(config: FH2Config): Uint8Array {
 	const name = (config.name + ' '.repeat(NAME_LENGTH)).substring(0, NAME_LENGTH);
 	for (let i = 0; i < NAME_LENGTH; i++) payload[OFF_NAME + i] = name.charCodeAt(i) & 0x7f;
 
+	// globals (three regions)
+	encodeFields(config.globals, GLOBALS_A_FIELDS, payload, OFF_GLOBALS_A);
+	encodeFields(config.globals, GLOBALS_B_FIELDS, payload, OFF_GLOBALS_B);
+	encodeFields(config.globals, GLOBALS_C_FIELDS, payload, OFF_GLOBALS_C);
+
+	// output ranges (64 × 1 byte)
+	for (let i = 0; i < OUTPUT_COUNT; i++) {
+		payload[OFF_RANGES + i] = (config.outputRanges[i] ?? 0) & 0x7f;
+	}
+
+	// gate levels (64 × 4 bytes: lo short, hi short)
+	for (let i = 0; i < OUTPUT_COUNT; i++) {
+		const gl = config.gateLevels[i] ?? { lo: 0, hi: 0 };
+		const base = OFF_GATE_LEVELS + i * 4;
+		const lo = sysexSafeShort(gl.lo);
+		const hi = sysexSafeShort(gl.hi);
+		payload[base] = lo & 0x7f;
+		payload[base + 1] = lo >> 8;
+		payload[base + 2] = hi & 0x7f;
+		payload[base + 3] = hi >> 8;
+	}
+
 	// MCVs (16 × 32 bytes)
 	for (let i = 0; i < FH2_LIMITS.converters; i++) {
 		const conv = config.converters[i];
-		if (conv) encodeMcv(conv, payload, OFF_MCV + i * MCV_SIZE);
+		if (conv) encodeFields(conv, MCV_FIELDS, payload, OFF_MCV + i * MCV_SIZE);
 	}
 
 	// TODO: overlay remaining modeled sections here as they gain coverage.
@@ -167,9 +242,30 @@ export function decodeConfig(input: Uint8Array): FH2Config {
 	// Preserve the full payload so unmodeled fields survive a re-encode.
 	config.raw = payload.slice();
 
+	// globals (three regions)
+	decodeFields(config.globals, GLOBALS_A_FIELDS, payload, OFF_GLOBALS_A);
+	decodeFields(config.globals, GLOBALS_B_FIELDS, payload, OFF_GLOBALS_B);
+	decodeFields(config.globals, GLOBALS_C_FIELDS, payload, OFF_GLOBALS_C);
+
+	// output ranges (64 × 1 byte)
+	for (let i = 0; i < OUTPUT_COUNT; i++) {
+		config.outputRanges[i] = payload[OFF_RANGES + i];
+	}
+
+	// gate levels (64 × 4 bytes)
+	for (let i = 0; i < OUTPUT_COUNT; i++) {
+		const base = OFF_GATE_LEVELS + i * 4;
+		config.gateLevels[i] = {
+			lo: unSysexSafeShort(bytesToShort(payload[base], payload[base + 1])),
+			hi: unSysexSafeShort(bytesToShort(payload[base + 2], payload[base + 3]))
+		};
+	}
+
 	// MCVs (16 × 32 bytes)
 	for (let i = 0; i < FH2_LIMITS.converters; i++) {
-		config.converters[i] = decodeMcv(payload, OFF_MCV + i * MCV_SIZE, i + 1);
+		const conv = { id: i + 1 } as MidiCvConverter;
+		decodeFields(conv, MCV_FIELDS, payload, OFF_MCV + i * MCV_SIZE);
+		config.converters[i] = conv;
 	}
 
 	// TODO: parse remaining modeled sections here as they gain coverage.

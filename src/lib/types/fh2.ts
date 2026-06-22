@@ -56,30 +56,87 @@ export type MidiCC = number;
 /** MIDI note number, 0..127. */
 export type MidiNote = number;
 
-/** Source of a MIDI stream feeding a converter or destination. @verify enum order */
-export type MidiPort = 'usb' | 'din' | 'select' | 'internal';
-
 // ---------------------------------------------------------------------------
 // Globals
 // ---------------------------------------------------------------------------
+//
+// Modeled from the official tool's global fields. These are split across three
+// regions of the config dump (A: offset 21, B: offset 2924, C: offset 3604);
+// the codec writes each to the right place. Numeric fields hold the raw wire
+// value (0-based) unless noted; transpose is a signed value.
+
+/** Ext-clock run control (byte). */
+export const EXT_CLOCK_RUN_LABELS = ['None', 'Run/Stop on Y'] as const;
+/** Tap-tempo trigger source (byte). */
+export const TAP_TYPE_LABELS = ['None', 'Note', 'CC'] as const;
+/** Start/Stop control source (byte). */
+export const START_TYPE_LABELS = [
+	'None',
+	'Note Toggle',
+	'CC Toggle',
+	'Note Gate',
+	'CC Gate',
+	'Y Toggle',
+	'Y Gate'
+] as const;
 
 export interface Globals {
-	/** Master MIDI channel used by global functions. @verify */
-	masterChannel: MidiChannel;
-	/** Clock source: internal BPM, external MIDI clock, or analog clock input. */
-	clockSource: 'internal' | 'midi' | 'analog';
-	/** Internal clock tempo in BPM (used when clockSource === 'internal'). */
-	tempo: number;
-	/** Pulses-per-quarter-note for the analog clock output/input. @verify */
-	clockPpqn: number;
-	/** Whether the module sends MIDI clock out. */
-	sendClock: boolean;
-	/** Global pitch reference: volts-per-octave (1.0 = 1V/oct). */
-	voltsPerOctave: number;
-	/** Tuning reference note frequency, Hz (typically 440). */
-	tuningHz: number;
-	/** Route incoming USB MIDI to DIN out and vice-versa. @verify */
-	midiThru: boolean;
+	// --- region A (offset 21) ---
+	/** Default trigger length, 1..100 (ms). */
+	triggerLength: number;
+	/** Global transpose in semitones, −48..48 (signed on the wire). */
+	transpose: number;
+	/** Legato velocity. */
+	legatoVelocity: boolean;
+	/** External-clock multiplier, 1..96. */
+	extClockMultiplier: number;
+	/** External-clock run control (index into EXT_CLOCK_RUN_LABELS). */
+	extClockRun: number;
+	/** Preset program-change channel: 0 = Off, 1..16. */
+	presetProgramChange: number;
+	/** Soft takeover for CC control. */
+	softTakeover: boolean;
+
+	// --- region B (offset 2924) ---
+	/** Tap-tempo source (index into TAP_TYPE_LABELS). */
+	tapType: number;
+	/** Tap-tempo MIDI channel (raw wire value). */
+	tapChannel: number;
+	/** Tap-tempo MIDI CC (raw wire value). */
+	tapCC: number;
+	/** Euclidean accent threshold, raw 0..127 (UI shows +1). */
+	euclideanAccent: number;
+	/** Start/Stop source (index into START_TYPE_LABELS). */
+	startType: number;
+	/** Start/Stop MIDI channel (raw wire value). */
+	startChannel: number;
+	/** Start/Stop MIDI CC (raw wire value). */
+	startCC: number;
+
+	// --- region C (offset 3604) ---
+	/** Tempo range minimum, raw 0..127 (UI shows value+1 BPM). */
+	tempoMin: number;
+	/** Tempo range maximum, raw 0..127 (UI shows value+128 BPM). */
+	tempoMax: number;
+}
+
+// ---------------------------------------------------------------------------
+// Outputs
+// ---------------------------------------------------------------------------
+
+/** Number of addressable outputs that carry a range + gate-level (FH-2 + expanders). */
+export const OUTPUT_COUNT = 64;
+
+/** Output voltage range (the `rng_*` byte). */
+export const OUTPUT_RANGE_LABELS = ['0-10V', '±5V', '0-1V', '0-5V', '0-8V'] as const;
+export type OutputRange = 0 | 1 | 2 | 3 | 4;
+
+/** Per-output gate high/low levels — two 14-bit values packed as sysex shorts. */
+export interface GateLevel {
+	/** Gate "off"/low level. */
+	lo: number;
+	/** Gate "on"/high level. */
+	hi: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,38 +374,6 @@ export interface ShiftRegisterRandom {
 	reset: number;
 }
 
-// ---------------------------------------------------------------------------
-// Per-output settings (LFO, range, smoothing)
-// ---------------------------------------------------------------------------
-
-export type OutputVoltageRange = 'unipolar5' | 'unipolar8' | 'unipolar10' | 'bipolar5' | 'bipolar10';
-
-export type LfoShape = 'sine' | 'triangle' | 'saw' | 'ramp' | 'square' | 'random' | 'sampleHold';
-
-export interface OutputLfo {
-	enabled: boolean;
-	shape: LfoShape;
-	/** Rate; synced to clock when `sync` is true, else free Hz. @verify units. */
-	rate: number;
-	sync: boolean;
-	depth: number;
-	phase: number;
-}
-
-export interface OutputSettings {
-	/** Output index, 1..128. */
-	index: OutputIndex;
-	/** Human label shown in the UI (not necessarily stored on device). */
-	name?: string;
-	range: OutputVoltageRange;
-	/** Output offset voltage, device units. */
-	offset: number;
-	/** Slew/smoothing amount, 0..127. */
-	smoothing: number;
-	/** Invert the output. */
-	invert: boolean;
-	lfo: OutputLfo;
-}
 
 // ---------------------------------------------------------------------------
 // Expanders
@@ -442,7 +467,10 @@ export interface FH2Config {
 		drum: DrumSequencer;
 	};
 	shiftRegisters: ShiftRegisterRandom[];
-	outputs: OutputSettings[]; // one per addressable output in use
+	/** Output voltage range per addressable output (OUTPUT_COUNT entries). */
+	outputRanges: number[];
+	/** Per-output gate low/high levels (OUTPUT_COUNT entries). */
+	gateLevels: GateLevel[];
 	expanders: {
 		cv: FHX8CVConfig[];
 		gt: FHX8GTConfig[];

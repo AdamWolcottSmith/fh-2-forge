@@ -20,25 +20,19 @@ describe('config codec framing', () => {
 });
 
 describe('raw passthrough (round-trip safety for unmodeled fields)', () => {
-	it('preserves every byte of a decoded payload on re-encode', () => {
-		// Simulate a device payload with arbitrary data in unmodeled regions.
+	it('preserves bytes in unmodeled regions on re-encode', () => {
+		// Modeled sections normalise their bytes (e.g. bools → 0/1), so to assert
+		// the passthrough guarantee we put arbitrary data only in regions the codec
+		// does not yet model: the mapping table (604..2140) and the addendum
+		// (4096..end). Everything else stays zero, which round-trips cleanly.
 		const payload = new Uint8Array(PAYLOAD_LENGTH);
-		for (let i = 0; i < payload.length; i++) payload[i] = (i * 7) & 0x7f;
-		// valid version + name so decode is well-formed. The device space-pads
-		// names to 16 bytes (never null-terminates a short name), so we do too.
-		payload[0] = 11;
+		payload[0] = 11; // version
 		const name = 'Hardware Dump'.padEnd(16, ' ');
 		for (let i = 0; i < 16; i++) payload[4 + i] = name.charCodeAt(i);
-		// The MCV region (offset 92, 16×32 bytes) is now a *modeled* section, so
-		// boolean bytes normalise to 0/1 on re-encode. Zero it here — this test
-		// asserts the passthrough guarantee for the remaining *unmodeled* regions.
-		payload.fill(0, 92, 92 + 16 * 32);
+		for (let i = 604; i < 2140; i++) payload[i] = (i * 7) & 0x7f; // mappings
+		for (let i = 4096; i < PAYLOAD_LENGTH; i++) payload[i] = (i * 3) & 0x7f; // addendum
 
-		const decoded = decodeConfig(payload);
-		const reencoded = encodeConfig(decoded);
-
-		// The re-encoded payload (between header and F7) must equal the original.
-		const out = reencoded.slice(8, -1);
+		const out = encodeConfig(decodeConfig(payload)).slice(8, -1);
 		expect(out.length).toBe(payload.length);
 		expect([...out]).toEqual([...payload]);
 	});
@@ -106,5 +100,49 @@ describe('MCV (MIDI/CV converter) codec', () => {
 		cfg.converters[0].enabled = true; // byte 0 of the MCV block
 		const payload = encodeConfig(cfg).slice(8, -1);
 		expect(payload[92]).toBe(1);
+	});
+});
+
+describe('globals, output ranges, and gate levels', () => {
+	it('round-trips globals across all three regions (incl. signed transpose)', () => {
+		const cfg = createDefaultConfig();
+		Object.assign(cfg.globals, {
+			triggerLength: 75,
+			transpose: -12,
+			legatoVelocity: false,
+			extClockMultiplier: 24,
+			extClockRun: 1,
+			presetProgramChange: 5,
+			softTakeover: true,
+			tapType: 2,
+			tapChannel: 9,
+			tapCC: 64,
+			euclideanAccent: 100,
+			startType: 6,
+			startChannel: 3,
+			startCC: 80,
+			tempoMin: 20,
+			tempoMax: 110
+		});
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.globals).toEqual(cfg.globals);
+	});
+
+	it('round-trips output ranges and 14-bit gate levels', () => {
+		const cfg = createDefaultConfig();
+		for (let i = 0; i < cfg.outputRanges.length; i++) cfg.outputRanges[i] = i % 5;
+		cfg.gateLevels[0] = { lo: 0, hi: 16383 };
+		cfg.gateLevels[1] = { lo: 8192, hi: 12000 };
+		cfg.gateLevels[63] = { lo: 1, hi: 127 };
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.outputRanges).toEqual(cfg.outputRanges);
+		expect(decoded.gateLevels).toEqual(cfg.gateLevels);
+	});
+
+	it('places globals region A at offset 21', () => {
+		const cfg = createDefaultConfig();
+		cfg.globals.triggerLength = 42;
+		const payload = encodeConfig(cfg).slice(8, -1);
+		expect(payload[21]).toBe(42);
 	});
 });

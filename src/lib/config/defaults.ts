@@ -6,6 +6,7 @@
 import {
 	FH2_LIMITS,
 	MCV_TYPE,
+	OUTPUT_COUNT,
 	type ClockGenerator,
 	type DrumSequencer,
 	type DrumSequencerLane,
@@ -15,13 +16,12 @@ import {
 	type MidiCvConverter,
 	type NoteSequencer,
 	type NoteSequencerStep,
-	type OutputSettings,
 	type ShiftRegisterRandom,
 	type TriggerGenerator
 } from '$lib/types/fh2';
 
-/** The firmware revision this model currently targets. @verify */
-export const TARGET_FIRMWARE = 8;
+/** The config-dump version this model targets (matches the device firmware). */
+export const TARGET_FIRMWARE = 11;
 
 const DRUM_STEPS = 16;
 const NOTE_STEPS = 16;
@@ -162,27 +162,27 @@ export function defaultShiftRegister(id: number): ShiftRegisterRandom {
 	};
 }
 
-export function defaultOutput(index: number): OutputSettings {
-	return {
-		index: index + 1,
-		range: 'bipolar5',
-		offset: 0,
-		smoothing: 0,
-		invert: false,
-		lfo: { enabled: false, shape: 'sine', rate: 1, sync: false, depth: 64, phase: 0 }
-	};
-}
-
 function defaultGlobals(): Globals {
 	return {
-		masterChannel: 1,
-		clockSource: 'internal',
-		tempo: 120,
-		clockPpqn: 24,
-		sendClock: false,
-		voltsPerOctave: 1,
-		tuningHz: 440,
-		midiThru: false
+		// region A
+		triggerLength: 50,
+		transpose: 0,
+		legatoVelocity: true,
+		extClockMultiplier: 1,
+		extClockRun: 0,
+		presetProgramChange: 0,
+		softTakeover: false,
+		// region B
+		tapType: 0,
+		tapChannel: 0,
+		tapCC: 0,
+		euclideanAccent: 0,
+		startType: 0,
+		startChannel: 0,
+		startCC: 0,
+		// region C
+		tempoMin: 0,
+		tempoMax: 0
 	};
 }
 
@@ -202,7 +202,9 @@ export function createDefaultConfig(name = 'Untitled'): FH2Config {
 			drum: defaultDrumSequencer()
 		},
 		shiftRegisters: range(FH2_LIMITS.shiftRegisters, defaultShiftRegister),
-		outputs: range(FH2_LIMITS.outputs, defaultOutput),
+		// Output range default 1 = ±5V (a sensible bipolar default for CV).
+		outputRanges: range(OUTPUT_COUNT, () => 1),
+		gateLevels: range(OUTPUT_COUNT, () => ({ lo: 0, hi: 0 })),
 		expanders: { cv: [], gt: [] },
 		cvToMidi: [],
 		hid: { gamepad: [], keyboard: [] }

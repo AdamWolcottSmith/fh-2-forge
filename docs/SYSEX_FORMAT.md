@@ -120,6 +120,8 @@ most intricate part of the format; implement it last and test against a real
 - ✅ Constants, command/message builders, value-packing primitives — `protocol.ts`
 - ✅ Framing (header/version/name) + raw-passthrough for unmodeled regions — `codec.ts`
 - ✅ **MCV section** (16 × 32 bytes) fully modeled + round-trip tested — `codec.ts` `MCV_FIELDS`
-- ⬜ Remaining sections: globals, output ranges, mappings (384×4), clocks, gate
-  levels, triggers, euclidean, HID, LFO resets, CV→MIDI, sequencers, arp, SRR
+- ✅ **Globals** (regions A/B/C incl. signed transpose), **output ranges** (64),
+  **gate levels** (64 × 14-bit) — modeled + round-trip tested
+- ⬜ Remaining sections: mappings (384×4), clocks, triggers, euclidean, HID,
+  LFO resets, CV→MIDI, sequencers, arp, SRR
 - ⬜ Validate decode against a real hardware `.syx` capture (need a fixture)

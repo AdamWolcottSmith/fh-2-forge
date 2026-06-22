@@ -179,6 +179,7 @@ export function createDefaultConfig(name = 'Untitled'): FH2Config {
 		clocks: range(FH2_LIMITS.clocks, (i) => defaultClock(i + 1)),
 		triggers: range(FH2_LIMITS.triggers, (i) => defaultTrigger(i + 1)),
 		euclideans: range(FH2_LIMITS.euclideans, (i) => defaultEuclidean(i + 1)),
+		mappings: [],
 		sequencers: {
 			note: range(FH2_LIMITS.noteSequencers, (i) => defaultNoteSequencer(i + 1)),
 			drum: defaultDrumSequencer()

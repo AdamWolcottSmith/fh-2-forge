@@ -127,6 +127,11 @@ most intricate part of the format; implement it last and test against a real
 - ✅ **HID** gamepad + keyboard (32 × 8 each), **LFO resets** (64 × 2),
   **CV→MIDI** (2 × 8, signed levels), **sequencers** (note 4 + drum 1),
   **MIDI/CV 2 "arp"** (16 × 4), **SRR** (16 × 7 + addendum −1 flags)
-- ⬜ **Only the 384-entry mapping table remains** (the MIDI-learn backbone) —
-  everything else round-trips through the typed model
+- ✅ **Mapping table** (384 × 4) — semantic entries `{channel, cc, relative,
+  group, index}` in wire order; empty table emits `0x7f`-padded slots
+- ✅ **Every section of the config dump is now modeled.** Remaining raw bytes are
+  only device padding (name gap, per-section pad bytes, the 3811..4096 gap),
+  which still round-trip via the raw buffer.
+- ⬜ (Enhancement) resolve mapping `group`/`index` codes to human-readable
+  destination names (needs the `acc`/`aco` + per-section control-list tables)
 - ⬜ Validate decode against a real hardware `.syx` capture (need a fixture)

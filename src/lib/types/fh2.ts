@@ -26,6 +26,8 @@ export const FH2_LIMITS = {
 	clocks: 32,
 	triggers: 64,
 	euclideans: 16,
+	/** Maximum entries in the MIDI-mapping table. */
+	mappings: 384,
 	noteSequencers: 4,
 	/** Drum sequencer note assignments (8 lanes, one note each). */
 	drumNotes: 8,
@@ -428,6 +430,34 @@ export interface HidKeyboard {
 }
 
 // ---------------------------------------------------------------------------
+// MIDI mapping table (up to 384 entries) — the MIDI-learn backbone
+// ---------------------------------------------------------------------------
+//
+// A flat list of "this MIDI CC controls that parameter" assignments. Each entry
+// is 4 bytes on the wire: [0x30|ch, cc, group(+32 if relative), index]. Rather
+// than reverse every (group,index) to a named destination, we keep the semantic
+// entry — it round-trips exactly and a UI resolver can interpret the codes.
+//
+// Group codes (from the official encoder): output sources 0..8 (with a high/low
+// + index-offset scheme via `index`); per-converter arp=9, mcvCommands=11,
+// mcvm2=12, mcvm3=16; euclidean=10; SRR=15; note/drum seq=13; drum lanes=14;
+// and global functions 69/71/72/74/75/76/77/78/79 (tempo, display, swing,
+// nudge, inc/dec tempo).
+
+export interface Mapping {
+	/** Source MIDI channel, 1..16. */
+	channel: MidiChannel;
+	/** Source MIDI CC, 0..127. */
+	cc: MidiCC;
+	/** Relative (incremental) encoder mode rather than absolute. */
+	relative: boolean;
+	/** Destination control-group code (see note above). */
+	group: number;
+	/** Destination index within the group. */
+	index: number;
+}
+
+// ---------------------------------------------------------------------------
 // Top-level config
 // ---------------------------------------------------------------------------
 
@@ -448,6 +478,8 @@ export interface FH2Config {
 	clocks: ClockGenerator[]; // 32
 	triggers: TriggerGenerator[]; // 64
 	euclideans: EuclideanPattern[]; // 16
+	/** MIDI-mapping table entries (0..384), in wire order. */
+	mappings: Mapping[];
 	sequencers: {
 		note: NoteSequencer[]; // 4
 		drum: DrumSequencer; // 1

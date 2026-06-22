@@ -21,16 +21,18 @@ describe('config codec framing', () => {
 
 describe('raw passthrough (round-trip safety for unmodeled fields)', () => {
 	it('preserves bytes in unmodeled regions on re-encode', () => {
-		// Modeled sections normalise their bytes (e.g. bools → 0/1), so to assert
-		// the passthrough guarantee we put arbitrary data only in regions the codec
-		// does not yet model: the mapping table (604..2140) and the addendum
-		// (4096..end). Everything else stays zero, which round-trips cleanly.
+		// With the mapping table now modeled, the remaining unmodeled span is the
+		// pad-to-4096 gap after the SRR section (3811..4096) plus assorted pad
+		// bytes. Put arbitrary data in that gap; everything else stays zero and
+		// round-trips cleanly.
 		const payload = new Uint8Array(PAYLOAD_LENGTH);
 		payload[0] = 11; // version
 		const name = 'Hardware Dump'.padEnd(16, ' ');
 		for (let i = 0; i < 16; i++) payload[4 + i] = name.charCodeAt(i);
-		// The 384-entry mapping table (604..2140) is the only large unmodeled block.
-		for (let i = 604; i < 2140; i++) payload[i] = (i * 7) & 0x7f;
+		// Canonical empty mapping table (0x7f-padded slots) so the modeled region
+		// matches what the encoder emits.
+		for (let c = 604; c < 2140; c += 4) payload[c] = 0x7f;
+		for (let i = 3811; i < 4096; i++) payload[i] = (i * 7) & 0x7f;
 
 		const out = encodeConfig(decodeConfig(payload)).slice(8, -1);
 		expect(out.length).toBe(payload.length);
@@ -254,6 +256,29 @@ describe('HID, LFO resets, CV→MIDI, sequencers, arp, SRR', () => {
 		expect(d.sequencers.note[2]).toEqual(cfg.sequencers.note[2]);
 		expect(d.sequencers.drum).toEqual(cfg.sequencers.drum);
 		expect(d.mcv2[5]).toEqual(cfg.mcv2[5]);
+	});
+
+	it('round-trips a list of mapping-table entries (incl. relative flag)', () => {
+		const cfg = createDefaultConfig();
+		cfg.mappings = [
+			{ channel: 1, cc: 7, relative: false, group: 0, index: 5 },
+			{ channel: 16, cc: 74, relative: true, group: 9, index: 24 },
+			{ channel: 10, cc: 1, relative: false, group: 69, index: 0 },
+			{ channel: 4, cc: 80, relative: true, group: 15, index: 33 }
+		];
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.mappings).toEqual(cfg.mappings);
+	});
+
+	it('emits an empty mapping table as 0x7f-padded slots', () => {
+		const cfg = createDefaultConfig();
+		expect(cfg.mappings).toEqual([]);
+		const payload = encodeConfig(cfg).slice(8, -1);
+		// first mapping slot at offset 604 should be a padding entry
+		expect(payload[604]).toBe(0x7f);
+		expect([payload[605], payload[606], payload[607]]).toEqual([0, 0, 0]);
+		// and it decodes back to no entries
+		expect(decodeConfig(payload).mappings).toEqual([]);
 	});
 
 	it('round-trips SRR incl. −1 sentinels (output/change/trigger/nch)', () => {

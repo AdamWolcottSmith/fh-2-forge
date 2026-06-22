@@ -61,6 +61,8 @@ const OFF_GLOBALS_A = 21; // 7 bytes
 const OFF_RANGES = 28; // 64 bytes
 const OFF_MCV = 92; // 16 × 32 bytes
 const MCV_SIZE = 32;
+const OFF_MAPPINGS = 604; // 384 × 4 bytes
+const MAPPING_COUNT = 384;
 const OFF_CLOCKS = 2140; // 32 × 8 bytes (6 used)
 const CLOCK_SIZE = 8;
 const OFF_GATE_LEVELS = 2396; // 64 × 4 bytes (lo short, hi short)
@@ -440,6 +442,26 @@ export function encodeConfig(config: FH2Config): Uint8Array {
 		if (conv) encodeFields(conv, MCV_FIELDS, payload, OFF_MCV + i * MCV_SIZE);
 	}
 
+	// MIDI mapping table (384 × 4): active entries first, then 0x7f-padded slots
+	{
+		let c = OFF_MAPPINGS;
+		const entries = config.mappings.slice(0, MAPPING_COUNT);
+		for (const m of entries) {
+			payload[c] = 0x30 | ((m.channel - 1) & 0xf);
+			payload[c + 1] = m.cc & 0x7f;
+			payload[c + 2] = (m.group & ~32) | (m.relative ? 32 : 0);
+			payload[c + 3] = m.index & 0x7f;
+			c += 4;
+		}
+		const end = OFF_MAPPINGS + MAPPING_COUNT * 4;
+		for (; c < end; c += 4) {
+			payload[c] = 0x7f;
+			payload[c + 1] = 0;
+			payload[c + 2] = 0;
+			payload[c + 3] = 0;
+		}
+	}
+
 	// Clocks (32 × 8 bytes, 6 used)
 	for (let i = 0; i < FH2_LIMITS.clocks; i++) {
 		const clk = config.clocks[i];
@@ -566,6 +588,23 @@ export function decodeConfig(input: Uint8Array): FH2Config {
 		const conv = { id: i + 1 } as MidiCvConverter;
 		decodeFields(conv, MCV_FIELDS, payload, OFF_MCV + i * MCV_SIZE);
 		config.converters[i] = conv;
+	}
+
+	// MIDI mapping table (384 × 4): collect active entries (high nibble 0x3)
+	config.mappings = [];
+	for (let i = 0; i < MAPPING_COUNT; i++) {
+		const base = OFF_MAPPINGS + i * 4;
+		const b0 = payload[base];
+		if (b0 >> 4 === 3) {
+			const t0 = payload[base + 2];
+			config.mappings.push({
+				channel: (b0 & 0xf) + 1,
+				cc: payload[base + 1],
+				relative: (t0 & 32) !== 0,
+				group: t0 & ~32,
+				index: payload[base + 3]
+			});
+		}
 	}
 
 	// Clocks (32 × 8 bytes)

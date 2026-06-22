@@ -75,7 +75,7 @@ guessed here — it must be reverse-engineered from
 - [x] `FH2Config` data model + default/mock data
 - [x] SysEx layer skeleton with mock mode + `.syx` framing
 - [x] Reverse-engineer the real SysEx format (docs/SYSEX_FORMAT.md)
-- [~] Implement the real SysEx codec — framing + MCV section done; other sections pending
+- [x] Implement the real SysEx codec — all sections modeled + round-trip tested
 - [ ] Dashboard with static SVG module visualizer
 - [ ] Full MIDI/CV converter editor (all parameters)
 - [ ] Load/Send config + JSON + `.syx` import/export

@@ -122,6 +122,8 @@ most intricate part of the format; implement it last and test against a real
 - ✅ **MCV section** (16 × 32 bytes) fully modeled + round-trip tested — `codec.ts` `MCV_FIELDS`
 - ✅ **Globals** (regions A/B/C incl. signed transpose), **output ranges** (64),
   **gate levels** (64 × 14-bit) — modeled + round-trip tested
-- ⬜ Remaining sections: mappings (384×4), clocks, triggers, euclidean, HID,
-  LFO resets, CV→MIDI, sequencers, arp, SRR
+- ✅ **Clocks** (32 × 8), **triggers** (64 × 4, bit-packed env + any-note),
+  **euclidean** on/off output assignments (incl. −1 via addendum high-bit flag)
+- ⬜ Remaining sections: mappings (384×4), HID (gamepad/keyboard), LFO resets,
+  CV→MIDI, sequencers (note/drum), arp (MIDI/CV 2), SRR
 - ⬜ Validate decode against a real hardware `.syx` capture (need a fixture)

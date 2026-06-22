@@ -29,8 +29,8 @@ describe('raw passthrough (round-trip safety for unmodeled fields)', () => {
 		payload[0] = 11; // version
 		const name = 'Hardware Dump'.padEnd(16, ' ');
 		for (let i = 0; i < 16; i++) payload[4 + i] = name.charCodeAt(i);
-		for (let i = 604; i < 2140; i++) payload[i] = (i * 7) & 0x7f; // mappings
-		for (let i = 4096; i < PAYLOAD_LENGTH; i++) payload[i] = (i * 3) & 0x7f; // addendum
+		for (let i = 604; i < 2140; i++) payload[i] = (i * 7) & 0x7f; // mappings (unmodeled)
+		for (let i = 4128; i < PAYLOAD_LENGTH; i++) payload[i] = (i * 3) & 0x7f; // SRR addendum (unmodeled)
 
 		const out = encodeConfig(decodeConfig(payload)).slice(8, -1);
 		expect(out.length).toBe(payload.length);
@@ -144,5 +144,45 @@ describe('globals, output ranges, and gate levels', () => {
 		cfg.globals.triggerLength = 42;
 		const payload = encodeConfig(cfg).slice(8, -1);
 		expect(payload[21]).toBe(42);
+	});
+});
+
+describe('clocks, triggers, and euclidean', () => {
+	it('round-trips all default clocks/triggers/euclideans', () => {
+		const cfg = createDefaultConfig();
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.clocks).toEqual(cfg.clocks);
+		expect(decoded.triggers).toEqual(cfg.triggers);
+		expect(decoded.euclideans).toEqual(cfg.euclideans);
+	});
+
+	it('round-trips a populated clock', () => {
+		const cfg = createDefaultConfig();
+		cfg.clocks[5] = { id: 6, type: 2, base: 24, mult: 3, len: 50, output: 12, shift: 7 };
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.clocks[5]).toEqual(cfg.clocks[5]);
+	});
+
+	it('round-trips a trigger incl. bit-packed env and a real note', () => {
+		const cfg = createDefaultConfig();
+		cfg.triggers[10] = { id: 11, type: 9, channel: 10, note: 36, output: 20, env: 4 };
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.triggers[10]).toEqual(cfg.triggers[10]);
+	});
+
+	it('round-trips a trigger with "any note" (−1)', () => {
+		const cfg = createDefaultConfig();
+		cfg.triggers[0] = { id: 1, type: 1, channel: 16, note: -1, output: 5, env: 2 };
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.triggers[0]).toEqual(cfg.triggers[0]);
+	});
+
+	it('round-trips euclidean outputs incl. disabled (−1) via addendum flag', () => {
+		const cfg = createDefaultConfig();
+		cfg.euclideans[2] = { id: 3, output: 17, offOutput: -1 };
+		cfg.euclideans[4] = { id: 5, output: -1, offOutput: 33 };
+		const decoded = decodeConfig(encodeConfig(cfg));
+		expect(decoded.euclideans[2]).toEqual(cfg.euclideans[2]);
+		expect(decoded.euclideans[4]).toEqual(cfg.euclideans[4]);
 	});
 });

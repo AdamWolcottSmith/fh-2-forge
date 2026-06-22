@@ -17,9 +17,12 @@ import { createDefaultConfig } from '$lib/config/defaults';
 import {
 	FH2_LIMITS,
 	OUTPUT_COUNT,
+	type ClockGenerator,
+	type EuclideanPattern,
 	type FH2Config,
 	type Globals,
-	type MidiCvConverter
+	type MidiCvConverter,
+	type TriggerGenerator
 } from '$lib/types/fh2';
 import {
 	bytesToShort,
@@ -48,9 +51,18 @@ const OFF_GLOBALS_A = 21; // 7 bytes
 const OFF_RANGES = 28; // 64 bytes
 const OFF_MCV = 92; // 16 × 32 bytes
 const MCV_SIZE = 32;
+const OFF_CLOCKS = 2140; // 32 × 8 bytes (6 used)
+const CLOCK_SIZE = 8;
 const OFF_GATE_LEVELS = 2396; // 64 × 4 bytes (lo short, hi short)
+const OFF_TRIGGERS = 2652; // 64 × 4 bytes (bit-packed)
+const TRIGGER_SIZE = 4;
+const OFF_EUC_OUT = 2908; // 16 × 1 byte (low 7 bits)
 const OFF_GLOBALS_B = 2924; // 8 bytes (7 used + pad)
+const OFF_EUC_OFFOUT = 2932; // 16 × 1 byte (low 7 bits)
 const OFF_GLOBALS_C = 3604; // 4 bytes (2 used + pad)
+// Addendum (high-bit flags) at the very end of the payload.
+const OFF_ADDENDUM_EUC_ON = 4096; // 16 bytes
+const OFF_ADDENDUM_EUC_OFF = 4112; // 16 bytes
 
 // --- generic field-table codec ---------------------------------------------
 // Each section is a table of [key, kind]; encode/decode walk it symmetrically so
@@ -151,6 +163,41 @@ const GLOBALS_C_FIELDS: ReadonlyArray<readonly [keyof Globals, FieldKind]> = [
 	// bytes 2,3 are padding — preserved via raw
 ];
 
+// --- Clocks (32 × 8 bytes, 6 used), mirroring makeSysExClocks ---------------
+const CLOCK_FIELDS: ReadonlyArray<readonly [keyof ClockGenerator, FieldKind]> = [
+	['type', 'byte'],
+	['base', 'byte'],
+	['mult', 'byte'],
+	['len', 'byte'],
+	['output', 'byte'],
+	['shift', 'byte']
+	// bytes 6,7 are padding — preserved via raw
+];
+
+// --- Triggers (4 bytes, bit-packed) — mirrors makeSysExTriggers/parse -------
+function encodeTrigger(t: TriggerGenerator, payload: Uint8Array, base: number): void {
+	const env1 = (t.env - 1) & 0x3; // 0..3 split across two bytes
+	const anyNote = t.note < 0 ? 1 : 0;
+	payload[base] = (t.type & 0xf) | ((env1 >> 1) << 4);
+	payload[base + 1] = ((t.channel - 1) & 0xf) | ((env1 & 1) << 4) | (anyNote << 5);
+	payload[base + 2] = anyNote ? 0 : t.note & 0x7f;
+	payload[base + 3] = t.output & 0x7f;
+}
+
+function decodeTrigger(payload: Uint8Array, base: number, id: number): TriggerGenerator {
+	const b0 = payload[base];
+	const b1 = payload[base + 1];
+	const anyNote = (b1 >> 5) & 1;
+	return {
+		id,
+		type: b0 & 0xf,
+		channel: (b1 & 0xf) + 1,
+		note: anyNote ? -1 : payload[base + 2],
+		output: payload[base + 3],
+		env: (((b0 >> 4) << 1) | ((b1 >> 4) & 1)) + 1
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Encode
 // ---------------------------------------------------------------------------
@@ -201,6 +248,28 @@ export function encodeConfig(config: FH2Config): Uint8Array {
 	for (let i = 0; i < FH2_LIMITS.converters; i++) {
 		const conv = config.converters[i];
 		if (conv) encodeFields(conv, MCV_FIELDS, payload, OFF_MCV + i * MCV_SIZE);
+	}
+
+	// Clocks (32 × 8 bytes, 6 used)
+	for (let i = 0; i < FH2_LIMITS.clocks; i++) {
+		const clk = config.clocks[i];
+		if (clk) encodeFields(clk, CLOCK_FIELDS, payload, OFF_CLOCKS + i * CLOCK_SIZE);
+	}
+
+	// Triggers (64 × 4 bytes, bit-packed)
+	for (let i = 0; i < FH2_LIMITS.triggers; i++) {
+		const trg = config.triggers[i];
+		if (trg) encodeTrigger(trg, payload, OFF_TRIGGERS + i * TRIGGER_SIZE);
+	}
+
+	// Euclidean output assignments (low 7 bits here, high-bit flag in addendum)
+	for (let i = 0; i < FH2_LIMITS.euclideans; i++) {
+		const euc = config.euclideans[i];
+		if (!euc) continue;
+		payload[OFF_EUC_OUT + i] = euc.output & 0x7f;
+		payload[OFF_EUC_OFFOUT + i] = euc.offOutput & 0x7f;
+		payload[OFF_ADDENDUM_EUC_ON + i] = euc.output & 0x80 ? 1 : 0;
+		payload[OFF_ADDENDUM_EUC_OFF + i] = euc.offOutput & 0x80 ? 1 : 0;
 	}
 
 	// TODO: overlay remaining modeled sections here as they gain coverage.
@@ -266,6 +335,28 @@ export function decodeConfig(input: Uint8Array): FH2Config {
 		const conv = { id: i + 1 } as MidiCvConverter;
 		decodeFields(conv, MCV_FIELDS, payload, OFF_MCV + i * MCV_SIZE);
 		config.converters[i] = conv;
+	}
+
+	// Clocks (32 × 8 bytes)
+	for (let i = 0; i < FH2_LIMITS.clocks; i++) {
+		const clk = { id: i + 1 } as ClockGenerator;
+		decodeFields(clk, CLOCK_FIELDS, payload, OFF_CLOCKS + i * CLOCK_SIZE);
+		config.clocks[i] = clk;
+	}
+
+	// Triggers (64 × 4 bytes)
+	for (let i = 0; i < FH2_LIMITS.triggers; i++) {
+		config.triggers[i] = decodeTrigger(payload, OFF_TRIGGERS + i * TRIGGER_SIZE, i + 1);
+	}
+
+	// Euclidean output assignments (−1 when the addendum high-bit flag is set)
+	for (let i = 0; i < FH2_LIMITS.euclideans; i++) {
+		const euc: EuclideanPattern = {
+			id: i + 1,
+			output: payload[OFF_ADDENDUM_EUC_ON + i] ? -1 : payload[OFF_EUC_OUT + i],
+			offOutput: payload[OFF_ADDENDUM_EUC_OFF + i] ? -1 : payload[OFF_EUC_OFFOUT + i]
+		};
+		config.euclideans[i] = euc;
 	}
 
 	// TODO: parse remaining modeled sections here as they gain coverage.

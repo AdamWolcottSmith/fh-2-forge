@@ -241,66 +241,63 @@ export interface MidiCvConverter {
 // ---------------------------------------------------------------------------
 // Clock generators (up to 32)
 // ---------------------------------------------------------------------------
+//
+// 8 bytes per clock on the wire, 6 used (mirroring makeSysExClocks). Pattern
+// params beyond these (and which MIDI CCs control them live) come from the
+// mapping table, modeled later.
 
 export interface ClockGenerator {
-	id: number;
-	enabled: boolean;
-	output: OutputIndex;
-	/** Clock division/multiplication relative to the master clock. @verify encoding. */
-	division: number;
-	/** Output pulse width, 0..127. */
-	pulseWidth: number;
-	/** Swing amount, 0..127 (0 = straight). */
-	swing: number;
-	/** Phase offset in steps. */
-	phase: number;
-	/** Reset behaviour / reset source. @verify */
-	reset: number;
+	id: number; // 1..32
+	/** Clock type/mode (raw value; 0 = off). */
+	type: number;
+	/** Clock base division. */
+	base: number;
+	/** Clock multiplier. */
+	mult: number;
+	/** Output pulse length. */
+	len: number;
+	/** Output index. */
+	output: number;
+	/** Phase shift. */
+	shift: number;
 }
 
 // ---------------------------------------------------------------------------
 // Trigger generators (up to 64)
 // ---------------------------------------------------------------------------
+//
+// 4 bytes per trigger, bit-packed (mirroring makeSysExTriggers): the envelope
+// assignment is split across two bytes and "any note" is a flag bit.
 
 export interface TriggerGenerator {
-	id: number;
-	enabled: boolean;
-	output: OutputIndex;
-	/** MIDI note that fires this trigger. */
-	note: MidiNote;
+	id: number; // 1..64
+	/** Trigger type, 0..15. */
+	type: number;
+	/** MIDI channel, 1..16. */
 	channel: MidiChannel;
-	/** Trigger pulse length, ms or device units. @verify */
-	length: number;
-	/** Use velocity to scale the trigger's CV level. */
-	velocityToLevel: boolean;
+	/** Trigger note, or −1 for "any note". */
+	note: number;
+	/** Output index. */
+	output: number;
+	/** Envelope assignment, 1-based (stored as value−1 across two bytes). */
+	env: number;
 }
 
 // ---------------------------------------------------------------------------
-// Euclidean patterns (up to 16)
+// Euclidean output assignments (up to 16)
 // ---------------------------------------------------------------------------
+//
+// The config dump's euclidean section stores only the on/off output
+// assignments; −1 means "no output" and is encoded as a high-bit flag in the
+// addendum region. The rhythmic parameters (pulses/steps/rotation/…) are driven
+// via the mapping table and will be modeled with it.
 
 export interface EuclideanPattern {
-	id: number;
-	enabled: boolean;
-	output: OutputIndex;
-	/** Number of active pulses distributed across `steps`. */
-	pulses: number;
-	/** Total steps in the pattern. */
-	steps: number;
-	/** Rotation offset of the pattern, in steps. */
-	rotation: number;
-	/** Clock rate/division driving the pattern. @verify encoding. */
-	rate: number;
-	/** Output gate length, 0..127. */
-	gateLength: number;
-	/** Probability/rate of accented hits, 0..127. */
-	accentRate: number;
-	/** Reset source/behaviour. @verify */
-	reset: number;
-	/** Optional MIDI channel for triggering/recording. */
-	channel?: MidiChannel;
-	/** Optional CC for live control of the pattern. */
-	cc?: MidiCC;
+	id: number; // 1..16
+	/** Output index driven on a hit, or −1 for none. */
+	output: number;
+	/** Output index driven on a rest ("off"), or −1 for none. */
+	offOutput: number;
 }
 
 // ---------------------------------------------------------------------------

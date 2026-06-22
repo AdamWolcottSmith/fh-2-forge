@@ -69,43 +69,16 @@ export function defaultConverter(id: number): MidiCvConverter {
 }
 
 export function defaultClock(id: number): ClockGenerator {
-	return {
-		id,
-		enabled: false,
-		output: 1,
-		division: 24,
-		pulseWidth: 64,
-		swing: 0,
-		phase: 0,
-		reset: 0
-	};
+	return { id, type: 0, base: 0, mult: 0, len: 0, output: 0, shift: 0 };
 }
 
 export function defaultTrigger(id: number): TriggerGenerator {
-	return {
-		id,
-		enabled: false,
-		output: 1,
-		note: 36,
-		channel: 10,
-		length: 10,
-		velocityToLevel: false
-	};
+	return { id, type: 0, channel: 1, note: 0, output: 0, env: 1 };
 }
 
 export function defaultEuclidean(id: number): EuclideanPattern {
-	return {
-		id,
-		enabled: false,
-		output: 1,
-		pulses: 4,
-		steps: 16,
-		rotation: 0,
-		rate: 24,
-		gateLength: 32,
-		accentRate: 0,
-		reset: 0
-	};
+	// −1 outputs = disabled (encoded via the addendum high-bit flag).
+	return { id, output: -1, offOutput: -1 };
 }
 
 function defaultNoteStep(): NoteSequencerStep {
@@ -194,9 +167,10 @@ export function createDefaultConfig(name = 'Untitled'): FH2Config {
 		globals: defaultGlobals(),
 		// Converters are numbered 1..16 to match the device (decodeMcv sets id = i+1).
 		converters: range(FH2_LIMITS.converters, (i) => defaultConverter(i + 1)),
-		clocks: range(FH2_LIMITS.clocks, defaultClock),
-		triggers: range(FH2_LIMITS.triggers, defaultTrigger),
-		euclideans: range(FH2_LIMITS.euclideans, defaultEuclidean),
+		// 1-based ids to match the device (decode sets id = i+1).
+		clocks: range(FH2_LIMITS.clocks, (i) => defaultClock(i + 1)),
+		triggers: range(FH2_LIMITS.triggers, (i) => defaultTrigger(i + 1)),
+		euclideans: range(FH2_LIMITS.euclideans, (i) => defaultEuclidean(i + 1)),
 		sequencers: {
 			note: range(FH2_LIMITS.noteSequencers, defaultNoteSequencer),
 			drum: defaultDrumSequencer()

@@ -8,23 +8,23 @@ import {
 	MCV_TYPE,
 	OUTPUT_COUNT,
 	type ClockGenerator,
+	type CvToMidiMapping,
 	type DrumSequencer,
-	type DrumSequencerLane,
 	type EuclideanPattern,
 	type FH2Config,
 	type Globals,
+	type HidGamepad,
+	type HidKeyboard,
+	type LfoReset,
+	type Mcv2,
 	type MidiCvConverter,
 	type NoteSequencer,
-	type NoteSequencerStep,
 	type ShiftRegisterRandom,
 	type TriggerGenerator
 } from '$lib/types/fh2';
 
 /** The config-dump version this model targets (matches the device firmware). */
 export const TARGET_FIRMWARE = 11;
-
-const DRUM_STEPS = 16;
-const NOTE_STEPS = 16;
 
 function range<T>(count: number, make: (i: number) => T): T[] {
 	return Array.from({ length: count }, (_, i) => make(i));
@@ -81,58 +81,66 @@ export function defaultEuclidean(id: number): EuclideanPattern {
 	return { id, output: -1, offOutput: -1 };
 }
 
-function defaultNoteStep(): NoteSequencerStep {
-	return { note: 60, gate: 0, velocity: 100, tie: false, ratchet: 1 };
-}
+const NO_OUT_FLAGS = {
+	outInternal: false,
+	outC: false,
+	outA: false,
+	outD: false,
+	outS: false
+};
 
 export function defaultNoteSequencer(id: number): NoteSequencer {
-	return {
-		id,
-		enabled: false,
-		output: 1,
-		gateOutput: 1,
-		steps: range(NOTE_STEPS, defaultNoteStep),
-		length: NOTE_STEPS,
-		direction: 'forward',
-		permutation: 0,
-		rate: 24,
-		reset: 0,
-		transpose: 0
-	};
-}
-
-function defaultDrumLane(i: number): DrumSequencerLane {
-	return {
-		output: i + 1,
-		steps: range(DRUM_STEPS, () => false),
-		accents: range(DRUM_STEPS, () => false),
-		probability: range(DRUM_STEPS, () => 127),
-		muted: false
-	};
+	return { id, channel: 1, clk: 0, ...NO_OUT_FLAGS };
 }
 
 export function defaultDrumSequencer(): DrumSequencer {
-	return {
-		enabled: false,
-		lanes: range(FH2_LIMITS.drumLanes, defaultDrumLane),
-		length: DRUM_STEPS,
-		direction: 'forward',
-		rate: 24,
-		reset: 0
-	};
+	return { channel: 1, notes: range(FH2_LIMITS.drumNotes, () => 0), ...NO_OUT_FLAGS };
+}
+
+export function defaultMcv2(id: number): Mcv2 {
+	return { id, clk: 0, channel: 1, outC: false, outA: false, outD: false };
 }
 
 export function defaultShiftRegister(id: number): ShiftRegisterRandom {
 	return {
 		id,
-		enabled: false,
-		output: 1,
-		length: 8,
-		probability: 64,
-		range: 64,
-		rate: 24,
-		reset: 0
+		output: -1,
+		change: -1,
+		trigger: -1,
+		clk: 0,
+		nch: -1,
+		channel: 1,
+		...NO_OUT_FLAGS
 	};
+}
+
+export function defaultLfoReset(): LfoReset {
+	return { type: 0, channel: 0, cc: 0 };
+}
+
+export function defaultCvToMidi(id: number): CvToMidiMapping {
+	return {
+		id,
+		enabled: false,
+		outI: false,
+		outA: false,
+		outC: false,
+		outD: false,
+		outS: false,
+		type: 0,
+		channel: 1,
+		cc: 0,
+		v0: 0,
+		v5: 0
+	};
+}
+
+export function defaultHidGamepad(id: number): HidGamepad {
+	return { id, usage: 0, output: 0, scale: 0, offset: 0 };
+}
+
+export function defaultHidKeyboard(id: number): HidKeyboard {
+	return { id, type: 0, output: 0, key: 0, value0: 0, value1: 0 };
 }
 
 function defaultGlobals(): Globals {
@@ -172,15 +180,19 @@ export function createDefaultConfig(name = 'Untitled'): FH2Config {
 		triggers: range(FH2_LIMITS.triggers, (i) => defaultTrigger(i + 1)),
 		euclideans: range(FH2_LIMITS.euclideans, (i) => defaultEuclidean(i + 1)),
 		sequencers: {
-			note: range(FH2_LIMITS.noteSequencers, defaultNoteSequencer),
+			note: range(FH2_LIMITS.noteSequencers, (i) => defaultNoteSequencer(i + 1)),
 			drum: defaultDrumSequencer()
 		},
-		shiftRegisters: range(FH2_LIMITS.shiftRegisters, defaultShiftRegister),
+		mcv2: range(FH2_LIMITS.mcv2, (i) => defaultMcv2(i + 1)),
+		shiftRegisters: range(FH2_LIMITS.shiftRegisters, (i) => defaultShiftRegister(i + 1)),
+		lfoResets: range(FH2_LIMITS.lfoResets, defaultLfoReset),
 		// Output range default 1 = ±5V (a sensible bipolar default for CV).
 		outputRanges: range(OUTPUT_COUNT, () => 1),
 		gateLevels: range(OUTPUT_COUNT, () => ({ lo: 0, hi: 0 })),
-		expanders: { cv: [], gt: [] },
-		cvToMidi: [],
-		hid: { gamepad: [], keyboard: [] }
+		cvToMidi: range(FH2_LIMITS.cvToMidi, (i) => defaultCvToMidi(i + 1)),
+		hid: {
+			gamepad: range(FH2_LIMITS.hidGamepads, (i) => defaultHidGamepad(i + 1)),
+			keyboard: range(FH2_LIMITS.hidKeyboards, (i) => defaultHidKeyboard(i + 1))
+		}
 	};
 }

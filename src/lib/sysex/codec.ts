@@ -18,10 +18,19 @@ import {
 	FH2_LIMITS,
 	OUTPUT_COUNT,
 	type ClockGenerator,
+	type CvToMidiMapping,
+	type DrumSequencer,
 	type EuclideanPattern,
 	type FH2Config,
 	type Globals,
+	type HidGamepad,
+	type HidKeyboard,
+	type LfoReset,
+	type Mcv2,
 	type MidiCvConverter,
+	type NoteSequencer,
+	type OutputDestFlags,
+	type ShiftRegisterRandom,
 	type TriggerGenerator
 } from '$lib/types/fh2';
 import {
@@ -33,7 +42,8 @@ import {
 	sysexSafeShort,
 	sysexSafeSignedChar,
 	unSysexSafeShort,
-	unSysexSafeSignedChar
+	unSysexSafeSignedChar,
+	unSysexSafeSignedShort
 } from './protocol';
 
 /** Bytes of addendum (high-bits) appended after the 4096-byte padded body. */
@@ -59,10 +69,46 @@ const TRIGGER_SIZE = 4;
 const OFF_EUC_OUT = 2908; // 16 × 1 byte (low 7 bits)
 const OFF_GLOBALS_B = 2924; // 8 bytes (7 used + pad)
 const OFF_EUC_OFFOUT = 2932; // 16 × 1 byte (low 7 bits)
+const OFF_GAMEPAD = 2948; // 32 × 8 bytes
+const OFF_KEYBOARD = 3204; // 32 × 8 bytes
+const OFF_LFO_RESETS = 3460; // 64 × 2 bytes
+const OFF_CVMIDI = 3588; // 2 × 8 bytes
 const OFF_GLOBALS_C = 3604; // 4 bytes (2 used + pad)
+const OFF_NOTE_SEQ = 3608; // 4 × 4 bytes
+const OFF_DRUM_SEQ = 3624; // 1 × 11 bytes
+const OFF_MCV2 = 3635; // 16 × 4 bytes
+const OFF_SRR = 3699; // 16 × 7 bytes
 // Addendum (high-bit flags) at the very end of the payload.
 const OFF_ADDENDUM_EUC_ON = 4096; // 16 bytes
 const OFF_ADDENDUM_EUC_OFF = 4112; // 16 bytes
+const OFF_ADDENDUM_SRR = 4128; // 16 bytes
+
+// --- output-destination bit flags (sequencers, drum, SRR) -------------------
+function packOutFlags(o: OutputDestFlags): number {
+	return (
+		(o.outInternal ? 1 : 0) |
+		(o.outC ? 2 : 0) |
+		(o.outA ? 4 : 0) |
+		(o.outD ? 8 : 0) |
+		(o.outS ? 16 : 0)
+	);
+}
+function unpackOutFlags(b: number): OutputDestFlags {
+	return {
+		outInternal: !!(b & 1),
+		outC: !!(b & 2),
+		outA: !!(b & 4),
+		outD: !!(b & 8),
+		outS: !!(b & 16)
+	};
+}
+
+// --- 14-bit short helpers (write/read two consecutive bytes) ----------------
+function writeShort(payload: Uint8Array, at: number, value: number): void {
+	const p = sysexSafeShort(value);
+	payload[at] = p & 0x7f;
+	payload[at + 1] = p >> 8;
+}
 
 // --- generic field-table codec ---------------------------------------------
 // Each section is a table of [key, kind]; encode/decode walk it symmetrically so
@@ -198,6 +244,150 @@ function decodeTrigger(payload: Uint8Array, base: number, id: number): TriggerGe
 	};
 }
 
+// --- Note sequencers (4 bytes: ch-1, outs, clk, pad) ------------------------
+function encodeNoteSeq(s: NoteSequencer, payload: Uint8Array, base: number): void {
+	payload[base] = (s.channel - 1) & 0x7f;
+	payload[base + 1] = packOutFlags(s);
+	payload[base + 2] = s.clk & 0x7f;
+}
+function decodeNoteSeq(payload: Uint8Array, base: number, id: number): NoteSequencer {
+	return { id, channel: payload[base] + 1, ...unpackOutFlags(payload[base + 1]), clk: payload[base + 2] };
+}
+
+// --- Drum sequencer (ch-1, outs, pad, 8 notes) ------------------------------
+function encodeDrumSeq(s: DrumSequencer, payload: Uint8Array, base: number): void {
+	payload[base] = (s.channel - 1) & 0x7f;
+	payload[base + 1] = packOutFlags(s);
+	for (let j = 0; j < FH2_LIMITS.drumNotes; j++) payload[base + 3 + j] = s.notes[j] & 0x7f;
+}
+function decodeDrumSeq(payload: Uint8Array, base: number): DrumSequencer {
+	const notes: number[] = [];
+	for (let j = 0; j < FH2_LIMITS.drumNotes; j++) notes.push(payload[base + 3 + j]);
+	return { channel: payload[base] + 1, ...unpackOutFlags(payload[base + 1]), notes };
+}
+
+// --- MIDI/CV 2 "arp" (clk, m, pad, pad) -------------------------------------
+function encodeMcv2(m: Mcv2, payload: Uint8Array, base: number): void {
+	payload[base] = m.clk & 0x7f;
+	payload[base + 1] =
+		((m.channel - 1) & 0xf) | (m.outC ? 16 : 0) | (m.outA ? 32 : 0) | (m.outD ? 64 : 0);
+}
+function decodeMcv2(payload: Uint8Array, base: number, id: number): Mcv2 {
+	const m = payload[base + 1];
+	return {
+		id,
+		clk: payload[base],
+		channel: (m & 0xf) + 1,
+		outC: !!(m & 16),
+		outA: !!(m & 32),
+		outD: !!(m & 64)
+	};
+}
+
+// --- SRR (7 bytes + addendum high-bit flags for change/trigger -1) ----------
+function encodeSrr(s: ShiftRegisterRandom, payload: Uint8Array, base: number, i: number): void {
+	payload[base] = (s.output + 1) & 0x7f;
+	payload[base + 1] = s.change & 0x7f;
+	payload[base + 2] = s.trigger & 0x7f;
+	payload[base + 3] = s.clk & 0x7f;
+	payload[base + 4] = (s.nch < 0 ? 0 : s.nch) & 0x7f;
+	payload[base + 5] = (s.channel - 1) & 0x7f;
+	payload[base + 6] = packOutFlags(s);
+	payload[OFF_ADDENDUM_SRR + i] = (s.change & 0x80 ? 1 : 0) | (s.trigger & 0x80 ? 2 : 0);
+}
+function decodeSrr(payload: Uint8Array, base: number, i: number, id: number): ShiftRegisterRandom {
+	const add = payload[OFF_ADDENDUM_SRR + i];
+	const nchRaw = payload[base + 4];
+	return {
+		id,
+		output: payload[base] - 1,
+		change: add & 1 ? -1 : payload[base + 1],
+		trigger: add & 2 ? -1 : payload[base + 2],
+		clk: payload[base + 3],
+		nch: nchRaw > 0 ? nchRaw : -1,
+		channel: payload[base + 5] + 1,
+		...unpackOutFlags(payload[base + 6])
+	};
+}
+
+// --- LFO resets (2 bytes: (type<<4)|ch, cc) ---------------------------------
+function encodeLfoReset(l: LfoReset, payload: Uint8Array, base: number): void {
+	payload[base] = ((l.type & 0xf) << 4) | (l.channel & 0xf);
+	payload[base + 1] = l.cc & 0x7f;
+}
+function decodeLfoReset(payload: Uint8Array, base: number): LfoReset {
+	return { type: payload[base] >> 4, channel: payload[base] & 0xf, cc: payload[base + 1] };
+}
+
+// --- CV→MIDI (flags, type|ch, cc, pad, v0 short, v5 short) ------------------
+function encodeCvMidi(c: CvToMidiMapping, payload: Uint8Array, base: number): void {
+	payload[base] =
+		(c.enabled ? 1 : 0) |
+		(c.outI ? 2 : 0) |
+		(c.outA ? 4 : 0) |
+		(c.outC ? 8 : 0) |
+		(c.outD ? 16 : 0) |
+		(c.outS ? 32 : 0);
+	payload[base + 1] = ((c.type & 0xf) << 4) | ((c.channel - 1) & 0xf);
+	payload[base + 2] = c.cc & 0x7f;
+	writeShort(payload, base + 4, c.v0);
+	writeShort(payload, base + 6, c.v5);
+}
+function decodeCvMidi(payload: Uint8Array, base: number, id: number): CvToMidiMapping {
+	const t = payload[base];
+	return {
+		id,
+		enabled: !!(t & 1),
+		outI: !!(t & 2),
+		outA: !!(t & 4),
+		outC: !!(t & 8),
+		outD: !!(t & 16),
+		outS: !!(t & 32),
+		type: payload[base + 1] >> 4,
+		channel: (payload[base + 1] & 0xf) + 1,
+		cc: payload[base + 2],
+		v0: unSysexSafeSignedShort(bytesToShort(payload[base + 4], payload[base + 5])),
+		v5: unSysexSafeSignedShort(bytesToShort(payload[base + 6], payload[base + 7]))
+	};
+}
+
+// --- HID gamepad (usage, output, scale short, offset short, pad×2) ----------
+function encodeGamepad(g: HidGamepad, payload: Uint8Array, base: number): void {
+	payload[base] = g.usage & 0x7f;
+	payload[base + 1] = g.output & 0x7f;
+	writeShort(payload, base + 2, g.scale);
+	writeShort(payload, base + 4, g.offset);
+}
+function decodeGamepad(payload: Uint8Array, base: number, id: number): HidGamepad {
+	return {
+		id,
+		usage: payload[base],
+		output: payload[base + 1],
+		scale: unSysexSafeSignedShort(bytesToShort(payload[base + 2], payload[base + 3])),
+		offset: unSysexSafeSignedShort(bytesToShort(payload[base + 4], payload[base + 5]))
+	};
+}
+
+// --- HID keyboard (type, output, key, 0, value0 short, value1 short) --------
+function encodeKeyboard(k: HidKeyboard, payload: Uint8Array, base: number): void {
+	payload[base] = k.type & 0x7f;
+	payload[base + 1] = k.output & 0x7f;
+	payload[base + 2] = k.key & 0x7f;
+	payload[base + 3] = 0;
+	writeShort(payload, base + 4, k.value0);
+	writeShort(payload, base + 6, k.value1);
+}
+function decodeKeyboard(payload: Uint8Array, base: number, id: number): HidKeyboard {
+	return {
+		id,
+		type: payload[base],
+		output: payload[base + 1],
+		key: payload[base + 2],
+		value0: unSysexSafeShort(bytesToShort(payload[base + 4], payload[base + 5])),
+		value1: unSysexSafeShort(bytesToShort(payload[base + 6], payload[base + 7]))
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Encode
 // ---------------------------------------------------------------------------
@@ -270,6 +460,47 @@ export function encodeConfig(config: FH2Config): Uint8Array {
 		payload[OFF_EUC_OFFOUT + i] = euc.offOutput & 0x7f;
 		payload[OFF_ADDENDUM_EUC_ON + i] = euc.output & 0x80 ? 1 : 0;
 		payload[OFF_ADDENDUM_EUC_OFF + i] = euc.offOutput & 0x80 ? 1 : 0;
+	}
+
+	// HID gamepad / keyboard (32 × 8 each)
+	for (let i = 0; i < FH2_LIMITS.hidGamepads; i++) {
+		const g = config.hid.gamepad[i];
+		if (g) encodeGamepad(g, payload, OFF_GAMEPAD + i * 8);
+	}
+	for (let i = 0; i < FH2_LIMITS.hidKeyboards; i++) {
+		const k = config.hid.keyboard[i];
+		if (k) encodeKeyboard(k, payload, OFF_KEYBOARD + i * 8);
+	}
+
+	// LFO resets (64 × 2)
+	for (let i = 0; i < FH2_LIMITS.lfoResets; i++) {
+		const l = config.lfoResets[i];
+		if (l) encodeLfoReset(l, payload, OFF_LFO_RESETS + i * 2);
+	}
+
+	// CV→MIDI (2 × 8)
+	for (let i = 0; i < FH2_LIMITS.cvToMidi; i++) {
+		const c = config.cvToMidi[i];
+		if (c) encodeCvMidi(c, payload, OFF_CVMIDI + i * 8);
+	}
+
+	// Sequencers: note (4 × 4) + drum (1 × 11)
+	for (let i = 0; i < FH2_LIMITS.noteSequencers; i++) {
+		const s = config.sequencers.note[i];
+		if (s) encodeNoteSeq(s, payload, OFF_NOTE_SEQ + i * 4);
+	}
+	encodeDrumSeq(config.sequencers.drum, payload, OFF_DRUM_SEQ);
+
+	// MIDI/CV 2 "arp" (16 × 4)
+	for (let i = 0; i < FH2_LIMITS.mcv2; i++) {
+		const m = config.mcv2[i];
+		if (m) encodeMcv2(m, payload, OFF_MCV2 + i * 4);
+	}
+
+	// Shift-register random (16 × 7 + addendum)
+	for (let i = 0; i < FH2_LIMITS.shiftRegisters; i++) {
+		const s = config.shiftRegisters[i];
+		if (s) encodeSrr(s, payload, OFF_SRR + i * 7, i);
 	}
 
 	// TODO: overlay remaining modeled sections here as they gain coverage.
@@ -357,6 +588,40 @@ export function decodeConfig(input: Uint8Array): FH2Config {
 			offOutput: payload[OFF_ADDENDUM_EUC_OFF + i] ? -1 : payload[OFF_EUC_OFFOUT + i]
 		};
 		config.euclideans[i] = euc;
+	}
+
+	// HID gamepad / keyboard (32 × 8 each)
+	for (let i = 0; i < FH2_LIMITS.hidGamepads; i++) {
+		config.hid.gamepad[i] = decodeGamepad(payload, OFF_GAMEPAD + i * 8, i + 1);
+	}
+	for (let i = 0; i < FH2_LIMITS.hidKeyboards; i++) {
+		config.hid.keyboard[i] = decodeKeyboard(payload, OFF_KEYBOARD + i * 8, i + 1);
+	}
+
+	// LFO resets (64 × 2)
+	for (let i = 0; i < FH2_LIMITS.lfoResets; i++) {
+		config.lfoResets[i] = decodeLfoReset(payload, OFF_LFO_RESETS + i * 2);
+	}
+
+	// CV→MIDI (2 × 8)
+	for (let i = 0; i < FH2_LIMITS.cvToMidi; i++) {
+		config.cvToMidi[i] = decodeCvMidi(payload, OFF_CVMIDI + i * 8, i + 1);
+	}
+
+	// Sequencers: note (4 × 4) + drum (1 × 11)
+	for (let i = 0; i < FH2_LIMITS.noteSequencers; i++) {
+		config.sequencers.note[i] = decodeNoteSeq(payload, OFF_NOTE_SEQ + i * 4, i + 1);
+	}
+	config.sequencers.drum = decodeDrumSeq(payload, OFF_DRUM_SEQ);
+
+	// MIDI/CV 2 "arp" (16 × 4)
+	for (let i = 0; i < FH2_LIMITS.mcv2; i++) {
+		config.mcv2[i] = decodeMcv2(payload, OFF_MCV2 + i * 4, i + 1);
+	}
+
+	// Shift-register random (16 × 7 + addendum)
+	for (let i = 0; i < FH2_LIMITS.shiftRegisters; i++) {
+		config.shiftRegisters[i] = decodeSrr(payload, OFF_SRR + i * 7, i, i + 1);
 	}
 
 	// TODO: parse remaining modeled sections here as they gain coverage.

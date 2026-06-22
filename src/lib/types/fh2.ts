@@ -26,18 +26,22 @@ export const FH2_LIMITS = {
 	clocks: 32,
 	triggers: 64,
 	euclideans: 16,
-	noteSequencers: 8,
-	drumLanes: 8,
-	shiftRegisters: 8,
-	/** FH-2 has 8 physical outputs; expanders extend the addressable range to 128. */
+	noteSequencers: 4,
+	/** Drum sequencer note assignments (8 lanes, one note each). */
+	drumNotes: 8,
+	/** Secondary MIDI/CV ("arp") routings. */
+	mcv2: 16,
+	shiftRegisters: 16,
+	/** Per-output LFO-reset assignments. */
+	lfoResets: 64,
+	/** FH-2 has 8 physical outputs; expanders extend the addressable range. */
 	outputs: 8,
 	/** Max addressable output index across the FH-2 + all expanders. */
 	maxOutput: 128,
-	/** Up to 6 FHX-8CV and/or FHX-8GT expanders may be chained. @verify */
-	expandersCV: 6,
-	expandersGT: 6,
-	hidGamepads: 4,
-	hidKeyboards: 4
+	/** CV→MIDI input mappings. */
+	cvToMidi: 2,
+	hidGamepads: 32,
+	hidKeyboards: 32
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -303,139 +307,124 @@ export interface EuclideanPattern {
 // ---------------------------------------------------------------------------
 // Sequencers
 // ---------------------------------------------------------------------------
+//
+// The config dump stores the sequencers' MIDI/output routing (the per-step note
+// and pattern data is edited live on the device / via the mapping table).
 
-export type SequencerDirection = 'forward' | 'reverse' | 'pingpong' | 'random' | 'brownian';
-
-export interface NoteSequencerStep {
-	note: MidiNote;
-	/** 0 = rest, otherwise gate length 1..127. */
-	gate: number;
-	velocity: number;
-	/** Tie into the next step (sustain). */
-	tie: boolean;
-	/** Number of retriggers within the step (ratcheting). */
-	ratchet: number;
+/** Output-destination flags shared by sequencers and SRR. */
+export interface OutputDestFlags {
+	/** Internal routing. */
+	outInternal: boolean;
+	outC: boolean;
+	outA: boolean;
+	outD: boolean;
+	outS: boolean;
 }
 
-export interface NoteSequencer {
-	id: number;
-	enabled: boolean;
-	output: OutputIndex;
-	gateOutput: OutputIndex;
-	steps: NoteSequencerStep[];
-	length: number;
-	direction: SequencerDirection;
-	/** Step-order permutation index, if the FH-2 exposes permutations. @verify */
-	permutation: number;
-	/** Clock rate/division. @verify encoding. */
-	rate: number;
-	reset: number;
-	transpose: number;
+/** Note sequencer routing (4 of them). */
+export interface NoteSequencer extends OutputDestFlags {
+	id: number; // 1..4
+	channel: MidiChannel; // 1..16
+	clk: number;
 }
 
-export interface DrumSequencerLane {
-	output: OutputIndex;
-	/** One boolean per step: hit or no hit. */
-	steps: boolean[];
-	/** Per-step accent flags, aligned to `steps`. */
-	accents: boolean[];
-	/** Per-step probability 0..127, aligned to `steps`. */
-	probability: number[];
-	muted: boolean;
-}
-
-export interface DrumSequencer {
-	enabled: boolean;
-	lanes: DrumSequencerLane[]; // up to FH2_LIMITS.drumLanes
-	length: number;
-	direction: SequencerDirection;
-	rate: number;
-	reset: number;
+/** The single drum sequencer's routing + 8 note assignments. */
+export interface DrumSequencer extends OutputDestFlags {
+	channel: MidiChannel; // 1..16
+	/** 8 drum-lane note numbers. */
+	notes: number[];
 }
 
 // ---------------------------------------------------------------------------
-// Shift-register random (Turing-machine style)
+// MIDI/CV 2 ("arp") — secondary per-converter routing (16)
 // ---------------------------------------------------------------------------
 
-export interface ShiftRegisterRandom {
-	id: number;
-	enabled: boolean;
-	output: OutputIndex;
-	/** Register length in bits/steps. */
-	length: number;
-	/** Randomisation probability, 0..127 (0 = locked, 127 = fully random). */
-	probability: number;
-	/** Output voltage range scaling, 0..127. */
-	range: number;
-	rate: number;
-	reset: number;
-}
-
-
-// ---------------------------------------------------------------------------
-// Expanders
-// ---------------------------------------------------------------------------
-
-export interface FHX8CVConfig {
-	/** Position in the expander chain, 0-based. */
-	slot: number;
-	enabled: boolean;
-	/** Base output index this expander's 8 CV outputs map to. */
-	baseOutput: OutputIndex;
-}
-
-export interface FHX8GTConfig {
-	slot: number;
-	enabled: boolean;
-	/** Base output index this expander's 8 gate outputs map to. */
-	baseOutput: OutputIndex;
+export interface Mcv2 {
+	id: number; // 1..16
+	clk: number;
+	channel: MidiChannel; // 1..16
+	outC: boolean;
+	outA: boolean;
+	outD: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// CV → MIDI
+// Shift-register random (16)
 // ---------------------------------------------------------------------------
 
-export type CvToMidiMode = 'cc' | 'note' | 'pitchbend' | 'aftertouch' | 'clock' | 'start-stop';
+export interface ShiftRegisterRandom extends OutputDestFlags {
+	id: number; // 1..16
+	/** Output index, or −1 for none (stored as value+1). */
+	output: number;
+	/** "Change" output, or −1 (−1 via addendum high-bit flag). */
+	change: number;
+	/** "Trigger" output, or −1 (−1 via addendum high-bit flag). */
+	trigger: number;
+	clk: number;
+	/** Number of channels, or −1 for none. */
+	nch: number;
+	channel: MidiChannel; // 1..16
+}
+
+// ---------------------------------------------------------------------------
+// CV → MIDI (2 inputs)
+// ---------------------------------------------------------------------------
 
 export interface CvToMidiMapping {
-	id: number;
+	id: number; // 1..2
 	enabled: boolean;
-	/** Physical input used as the CV source. @verify input addressing. */
-	input: number;
-	mode: CvToMidiMode;
-	channel: MidiChannel;
-	cc?: MidiCC;
-	/** Input voltage that maps to MIDI value 0. */
-	rangeLow: number;
-	/** Input voltage that maps to MIDI value 127. */
-	rangeHigh: number;
+	/** Output-to-MIDI flags (I/A/C/D/S). */
+	outI: boolean;
+	outA: boolean;
+	outC: boolean;
+	outD: boolean;
+	outS: boolean;
+	type: number;
+	channel: MidiChannel; // 1..16
+	cc: MidiCC;
+	/** Input voltage mapped to MIDI 0 (signed 14-bit). */
+	v0: number;
+	/** Input voltage mapped to MIDI 127 (signed 14-bit). */
+	v5: number;
 }
 
 // ---------------------------------------------------------------------------
-// HID (USB gamepad / keyboard)
+// LFO resets (per output, 64)
 // ---------------------------------------------------------------------------
 
-export interface HIDGamepadConfig {
-	id: number;
-	enabled: boolean;
-	/** Mapping from gamepad controls to outputs/MIDI. @verify shape. */
-	mappings: HIDMapping[];
+export interface LfoReset {
+	/** Reset trigger type (0..15). */
+	type: number;
+	/** MIDI channel, raw 0..15. */
+	channel: number;
+	cc: MidiCC;
 }
 
-export interface HIDKeyboardConfig {
-	id: number;
-	enabled: boolean;
-	mappings: HIDMapping[];
+// ---------------------------------------------------------------------------
+// HID (USB gamepad / keyboard) — 32 mappings each
+// ---------------------------------------------------------------------------
+
+export interface HidGamepad {
+	id: number; // 1..32
+	/** HID usage code. */
+	usage: number;
+	output: number;
+	/** Scale, signed 14-bit. */
+	scale: number;
+	/** Offset, signed 14-bit. */
+	offset: number;
 }
 
-export interface HIDMapping {
-	/** HID control identifier (button/axis index). */
-	control: number;
-	/** Destination output, or 0 for MIDI. */
-	output?: OutputIndex;
-	/** Destination MIDI CC, when routed to MIDI. */
-	cc?: MidiCC;
-	channel?: MidiChannel;
+export interface HidKeyboard {
+	id: number; // 1..32
+	type: number;
+	output: number;
+	/** Key code. */
+	key: number;
+	/** Value at key-down (14-bit). */
+	value0: number;
+	/** Value at key-up (14-bit). */
+	value1: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,26 +444,24 @@ export interface FH2Config {
 	 */
 	raw?: Uint8Array;
 	globals: Globals;
-	converters: MidiCvConverter[]; // up to 16
-	clocks: ClockGenerator[]; // up to 32
-	triggers: TriggerGenerator[]; // up to 64
-	euclideans: EuclideanPattern[]; // up to 16
+	converters: MidiCvConverter[]; // 16
+	clocks: ClockGenerator[]; // 32
+	triggers: TriggerGenerator[]; // 64
+	euclideans: EuclideanPattern[]; // 16
 	sequencers: {
-		note: NoteSequencer[];
-		drum: DrumSequencer;
+		note: NoteSequencer[]; // 4
+		drum: DrumSequencer; // 1
 	};
-	shiftRegisters: ShiftRegisterRandom[];
+	mcv2: Mcv2[]; // 16
+	shiftRegisters: ShiftRegisterRandom[]; // 16
+	lfoResets: LfoReset[]; // 64
 	/** Output voltage range per addressable output (OUTPUT_COUNT entries). */
 	outputRanges: number[];
 	/** Per-output gate low/high levels (OUTPUT_COUNT entries). */
 	gateLevels: GateLevel[];
-	expanders: {
-		cv: FHX8CVConfig[];
-		gt: FHX8GTConfig[];
-	};
-	cvToMidi: CvToMidiMapping[];
+	cvToMidi: CvToMidiMapping[]; // 2
 	hid: {
-		gamepad: HIDGamepadConfig[];
-		keyboard: HIDKeyboardConfig[];
+		gamepad: HidGamepad[]; // 32
+		keyboard: HidKeyboard[]; // 32
 	};
 }

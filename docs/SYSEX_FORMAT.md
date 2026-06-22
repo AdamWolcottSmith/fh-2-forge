@@ -124,6 +124,9 @@ most intricate part of the format; implement it last and test against a real
   **gate levels** (64 × 14-bit) — modeled + round-trip tested
 - ✅ **Clocks** (32 × 8), **triggers** (64 × 4, bit-packed env + any-note),
   **euclidean** on/off output assignments (incl. −1 via addendum high-bit flag)
-- ⬜ Remaining sections: mappings (384×4), HID (gamepad/keyboard), LFO resets,
-  CV→MIDI, sequencers (note/drum), arp (MIDI/CV 2), SRR
+- ✅ **HID** gamepad + keyboard (32 × 8 each), **LFO resets** (64 × 2),
+  **CV→MIDI** (2 × 8, signed levels), **sequencers** (note 4 + drum 1),
+  **MIDI/CV 2 "arp"** (16 × 4), **SRR** (16 × 7 + addendum −1 flags)
+- ⬜ **Only the 384-entry mapping table remains** (the MIDI-learn backbone) —
+  everything else round-trips through the typed model
 - ⬜ Validate decode against a real hardware `.syx` capture (need a fixture)

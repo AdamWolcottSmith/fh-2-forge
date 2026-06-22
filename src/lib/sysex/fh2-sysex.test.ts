@@ -11,7 +11,10 @@ describe('default config', () => {
 		expect(c.triggers).toHaveLength(FH2_LIMITS.triggers);
 		expect(c.euclideans).toHaveLength(FH2_LIMITS.euclideans);
 		expect(c.sequencers.note).toHaveLength(FH2_LIMITS.noteSequencers);
-		expect(c.sequencers.drum.lanes).toHaveLength(FH2_LIMITS.drumLanes);
+		expect(c.sequencers.drum.notes).toHaveLength(FH2_LIMITS.drumNotes);
+		expect(c.shiftRegisters).toHaveLength(FH2_LIMITS.shiftRegisters);
+		expect(c.hid.gamepad).toHaveLength(FH2_LIMITS.hidGamepads);
+		expect(c.lfoResets).toHaveLength(OUTPUT_COUNT);
 		expect(c.outputRanges).toHaveLength(OUTPUT_COUNT);
 		expect(c.gateLevels).toHaveLength(OUTPUT_COUNT);
 	});

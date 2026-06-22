@@ -29,8 +29,8 @@ describe('raw passthrough (round-trip safety for unmodeled fields)', () => {
 		payload[0] = 11; // version
 		const name = 'Hardware Dump'.padEnd(16, ' ');
 		for (let i = 0; i < 16; i++) payload[4 + i] = name.charCodeAt(i);
-		for (let i = 604; i < 2140; i++) payload[i] = (i * 7) & 0x7f; // mappings (unmodeled)
-		for (let i = 4128; i < PAYLOAD_LENGTH; i++) payload[i] = (i * 3) & 0x7f; // SRR addendum (unmodeled)
+		// The 384-entry mapping table (604..2140) is the only large unmodeled block.
+		for (let i = 604; i < 2140; i++) payload[i] = (i * 7) & 0x7f;
 
 		const out = encodeConfig(decodeConfig(payload)).slice(8, -1);
 		expect(out.length).toBe(payload.length);
@@ -184,5 +184,95 @@ describe('clocks, triggers, and euclidean', () => {
 		const decoded = decodeConfig(encodeConfig(cfg));
 		expect(decoded.euclideans[2]).toEqual(cfg.euclideans[2]);
 		expect(decoded.euclideans[4]).toEqual(cfg.euclideans[4]);
+	});
+});
+
+describe('HID, LFO resets, CV→MIDI, sequencers, arp, SRR', () => {
+	it('round-trips all defaults for the new sections', () => {
+		const cfg = createDefaultConfig();
+		const d = decodeConfig(encodeConfig(cfg));
+		expect(d.hid).toEqual(cfg.hid);
+		expect(d.lfoResets).toEqual(cfg.lfoResets);
+		expect(d.cvToMidi).toEqual(cfg.cvToMidi);
+		expect(d.sequencers).toEqual(cfg.sequencers);
+		expect(d.mcv2).toEqual(cfg.mcv2);
+		expect(d.shiftRegisters).toEqual(cfg.shiftRegisters);
+	});
+
+	it('round-trips a populated gamepad + keyboard (signed/unsigned shorts)', () => {
+		const cfg = createDefaultConfig();
+		cfg.hid.gamepad[7] = { id: 8, usage: 12, output: 5, scale: -4096, offset: 8000 };
+		cfg.hid.keyboard[9] = { id: 10, type: 2, output: 6, key: 65, value0: 0, value1: 16383 };
+		const d = decodeConfig(encodeConfig(cfg));
+		expect(d.hid.gamepad[7]).toEqual(cfg.hid.gamepad[7]);
+		expect(d.hid.keyboard[9]).toEqual(cfg.hid.keyboard[9]);
+	});
+
+	it('round-trips CV→MIDI with flags and signed levels', () => {
+		const cfg = createDefaultConfig();
+		cfg.cvToMidi[0] = {
+			id: 1,
+			enabled: true,
+			outI: true,
+			outA: false,
+			outC: true,
+			outD: false,
+			outS: true,
+			type: 3,
+			channel: 12,
+			cc: 74,
+			v0: -2000,
+			v5: 2000
+		};
+		const d = decodeConfig(encodeConfig(cfg));
+		expect(d.cvToMidi[0]).toEqual(cfg.cvToMidi[0]);
+	});
+
+	it('round-trips note/drum sequencers and arp routing', () => {
+		const cfg = createDefaultConfig();
+		cfg.sequencers.note[2] = {
+			id: 3,
+			channel: 7,
+			clk: 24,
+			outInternal: true,
+			outC: false,
+			outA: true,
+			outD: false,
+			outS: true
+		};
+		cfg.sequencers.drum = {
+			channel: 10,
+			outInternal: false,
+			outC: true,
+			outA: false,
+			outD: true,
+			outS: false,
+			notes: [36, 38, 42, 46, 50, 45, 48, 51]
+		};
+		cfg.mcv2[5] = { id: 6, clk: 12, channel: 4, outC: true, outA: false, outD: true };
+		const d = decodeConfig(encodeConfig(cfg));
+		expect(d.sequencers.note[2]).toEqual(cfg.sequencers.note[2]);
+		expect(d.sequencers.drum).toEqual(cfg.sequencers.drum);
+		expect(d.mcv2[5]).toEqual(cfg.mcv2[5]);
+	});
+
+	it('round-trips SRR incl. −1 sentinels (output/change/trigger/nch)', () => {
+		const cfg = createDefaultConfig();
+		cfg.shiftRegisters[1] = {
+			id: 2,
+			output: 14,
+			change: -1,
+			trigger: 22,
+			clk: 24,
+			nch: 4,
+			channel: 9,
+			outInternal: true,
+			outC: true,
+			outA: false,
+			outD: false,
+			outS: true
+		};
+		const d = decodeConfig(encodeConfig(cfg));
+		expect(d.shiftRegisters[1]).toEqual(cfg.shiftRegisters[1]);
 	});
 });

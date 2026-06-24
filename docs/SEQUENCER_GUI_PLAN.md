@@ -69,15 +69,44 @@ until then the dashboard metric is misleading.
    ring at an app-set tempo for feel; no real-time MIDI plumbing now. Device-sync is a
    possible later add if MIDI exposes step position.
 
+## Layout brainstorm — progress (2026-06-24)
+
+We're choosing the **overall shape** of the Euclidean editor: how you see all 16
+generators vs. how you deep-edit one. Each generator = ~7 params (pulses, steps,
+rotation, rate, gate length, accent, reset), shown as a rhythm ring (filled dot =
+hit, hollow = rest).
+
+**Tooling note:** tried the superpowers browser visual-companion; it wasn't working
+for the user, so we **stopped the server and switched to standalone `.svg` mockups**
+checked into the repo. That worked well — prefer this approach for future visual
+brainstorming here. A reusable generator lives in scratch
+(`gen_mockups.py`) — it renders accurate Bjorklund rings; **note the bug it caught:
+Bjorklund infinite-loops when `pulses == 0`, so the real implementation must
+short-circuit `pulses == 0 → all rests` and `pulses == steps → all hits`.**
+
+**Three layout options generated** → `docs/mockups/`:
+- `layout-a-grid.svg` — **A · Grid**: all 16 rings in a 4×4; click one to edit.
+  Best overview, weakest deep-edit (controls not always visible).
+- `layout-b-focus.svg` — **B · Focus + list**: one big ring + all 7 controls always
+  visible, sidebar list (with mini-rings) to switch. Best deep-edit, weakest overview.
+- `layout-c-hybrid.svg` — **C · Hybrid**: big editable ring + controls on top, live
+  thumbnail strip of all 16 below, plus in-browser ▶ preview. Both at once; most
+  screen-hungry, no mode-switching.
+
+**My recommendation: C (Hybrid)** — always editing one rhythm hands-on while seeing
+how all 16 relate; the ▶ preview gives immediate feel. Directly serves "make the
+sequencers make sense and be fun."
+
+**⏸ AWAITING USER:** which layout direction (A/B/C), and whether the ring
+visualization reads clearly. That answer unblocks the rest of the layout brainstorm.
+
 ## Next steps (resume here)
 
-1. **(Pending) Visual companion offer** — I offered to open a browser tab for layout
-   mockups (the ring + controls + how all 16 patterns sit on screen). Awaiting the
-   user's yes/no. Layout is the next brainstorm question either way.
-2. Finish brainstorming the Euclidean editor: screen layout, whether to unify config-side
-   routing (`output`/`offOutput`) with preset params in one per-pattern view, and how the
-   16 patterns are presented (grid of rings vs. one big ring + selector).
-3. Write the design doc to `docs/superpowers/specs/2026-06-23-fh2-euclidean-editor-design.md`,
+1. **Get the layout decision** (A/B/C above) — currently waiting on the user.
+2. Finish brainstorming the Euclidean editor: whether to unify config-side routing
+   (`output`/`offOutput`) with preset params in one per-pattern view; exact control
+   set + ranges per generator; how the ▶ in-browser preview behaves.
+3. Write the design doc to `docs/superpowers/specs/2026-06-24-fh2-euclidean-editor-design.md`,
    self-review, commit, user-review.
 4. Then invoke the `writing-plans` skill for the implementation plan.
 

@@ -13,9 +13,11 @@
 import { createDefaultConfig } from '$lib/config/defaults';
 import type { FH2Config } from '$lib/types/fh2';
 import { decodeConfig, encodeConfig } from './codec';
+import { decodePreset, encodePreset, createEmptyPreset, type PresetModel } from './preset-codec';
 import {
 	classifyMessage,
 	requestConfigMessage,
+	requestPresetMessage,
 	requestVersionMessage,
 	saveToFlashMessage
 } from './protocol';
@@ -33,6 +35,8 @@ export interface MidiTransport {
 	requestConfig(): Promise<FH2Config>;
 	sendConfig(config: FH2Config): Promise<void>;
 	saveToFlash(): Promise<void>;
+	requestPreset(): Promise<PresetModel>;
+	sendPreset(preset: PresetModel): Promise<void>;
 }
 
 /** How long to wait for a device reply before giving up. */
@@ -44,6 +48,7 @@ const REPLY_TIMEOUT_MS = 4000;
 
 export class MockTransport implements MidiTransport {
 	private stored: FH2Config = createDefaultConfig('Mock Device Config');
+	private storedPreset: PresetModel = createEmptyPreset();
 
 	async connect(): Promise<ConnectionState> {
 		return { status: 'mock' };
@@ -59,6 +64,12 @@ export class MockTransport implements MidiTransport {
 		this.stored = structuredClone(config);
 	}
 	async saveToFlash(): Promise<void> {}
+	async requestPreset(): Promise<PresetModel> {
+		return structuredClone(this.storedPreset);
+	}
+	async sendPreset(preset: PresetModel): Promise<void> {
+		this.storedPreset = structuredClone(preset);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +83,7 @@ export class WebMidiTransport implements MidiTransport {
 
 	/** Resolvers for the in-flight request, keyed by expected reply kind. */
 	private pendingConfig?: (payload: Uint8Array) => void;
+	private pendingPreset?: (payload: Uint8Array) => void;
 	private pendingVersion?: (version: string) => void;
 
 	async connect(): Promise<ConnectionState> {
@@ -103,6 +115,10 @@ export class WebMidiTransport implements MidiTransport {
 		if (msg.kind === 'config' && this.pendingConfig) {
 			const resolve = this.pendingConfig;
 			this.pendingConfig = undefined;
+			resolve(msg.payload);
+		} else if (msg.kind === 'preset' && this.pendingPreset) {
+			const resolve = this.pendingPreset;
+			this.pendingPreset = undefined;
 			resolve(msg.payload);
 		} else if (msg.kind === 'version' && this.pendingVersion) {
 			const resolve = this.pendingVersion;
@@ -146,6 +162,24 @@ export class WebMidiTransport implements MidiTransport {
 
 	async sendConfig(config: FH2Config): Promise<void> {
 		this.send(encodeConfig(config));
+	}
+
+	async requestPreset(): Promise<PresetModel> {
+		const reply = new Promise<Uint8Array>((resolve, reject) => {
+			this.pendingPreset = resolve;
+			setTimeout(() => {
+				if (this.pendingPreset) {
+					this.pendingPreset = undefined;
+					reject(new Error('Timed out waiting for preset dump.'));
+				}
+			}, REPLY_TIMEOUT_MS);
+		});
+		this.send(requestPresetMessage());
+		return decodePreset(await reply);
+	}
+
+	async sendPreset(preset: PresetModel): Promise<void> {
+		this.send(encodePreset(preset));
 	}
 
 	async saveToFlash(): Promise<void> {

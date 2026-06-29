@@ -3,6 +3,7 @@ import { createDefaultConfig } from '$lib/config/defaults';
 import { FH2_LIMITS, OUTPUT_COUNT } from '$lib/types/fh2';
 import { MockTransport } from './fh2-sysex';
 
+
 describe('default config', () => {
 	it('populates the documented entity counts', () => {
 		const c = createDefaultConfig();
@@ -34,5 +35,18 @@ describe('MockTransport', () => {
 		got.globals.triggerLength = 90;
 		const again = await t.requestConfig();
 		expect(again.globals.triggerLength).toBe(137);
+	});
+});
+
+describe('MockTransport preset', () => {
+	it('stores and returns a sent preset', async () => {
+		const t = new MockTransport();
+		const p = await t.requestPreset();
+		p.euclidean = [
+			{ pulses: 3, steps: 8, rotation: 0, rate: 12, gateLength: 0, accent: 0, reset: 0 }
+		];
+		await t.sendPreset(p);
+		const back = await t.requestPreset();
+		expect(back.euclidean[0]?.pulses).toBe(3);
 	});
 });

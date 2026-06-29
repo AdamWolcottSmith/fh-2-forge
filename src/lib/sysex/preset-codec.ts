@@ -56,6 +56,20 @@ function decodeEuclidean(payload: Uint8Array): EuclideanGenerator[] {
 	return gens;
 }
 
+function encodeEuclidean(gens: EuclideanGenerator[], payload: Uint8Array): void {
+	gens.forEach((g, i) => {
+		const base = OFF_EUCLIDEAN + i * EUC_STRIDE;
+		payload[base + 0] = g.pulses & 0x7f;
+		payload[base + 1] = g.steps & 0x7f;
+		payload[base + 2] = g.rotation & 0x7f;
+		payload[base + 3] = g.rate & 0x7f;
+		payload[base + 4] = g.gateLength & 0x7f;
+		payload[base + 5] = g.accent & 0x7f;
+		payload[base + 6] = g.reset & 0x7f;
+		// base + 7 padding left untouched (preserved from raw)
+	});
+}
+
 export function decodePreset(input: Uint8Array): PresetModel {
 	const payload = toPayload(input);
 	const version =
@@ -76,7 +90,7 @@ export function decodePreset(input: Uint8Array): PresetModel {
 
 export function encodePreset(model: PresetModel): Uint8Array {
 	const payload = model.raw.slice();
-	// Task 3/4 will write Euclidean bytes here.
+	if (model.euclidean.length) encodeEuclidean(model.euclidean, payload);
 	return new Uint8Array([...PRESET_DUMP_HEADER, ...payload, 0xf7]);
 }
 

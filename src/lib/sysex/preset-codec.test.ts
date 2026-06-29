@@ -52,3 +52,21 @@ describe('preset codec — Euclidean decode', () => {
 		}
 	});
 });
+
+describe('preset codec — Euclidean encode', () => {
+	it('still round-trips byte-for-byte after decode populates euclidean', () => {
+		const out = encodePreset(decodePreset(presetSyx));
+		expect([...out]).toEqual([...presetSyx]);
+	});
+
+	it('editing one field changes exactly one payload byte', () => {
+		const p = decodePreset(presetSyx);
+		p.euclidean[0].pulses = 5;
+		const out = encodePreset(p).slice(8, -1); // payload only
+		const orig = presetSyx.slice(8, -1);
+		const diffs: number[] = [];
+		for (let i = 0; i < orig.length; i++) if (out[i] !== orig[i]) diffs.push(i);
+		expect(diffs).toEqual([1372]); // generator 0, pulses byte
+		expect(out[1372]).toBe(5);
+	});
+});

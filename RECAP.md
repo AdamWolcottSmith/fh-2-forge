@@ -7,12 +7,21 @@ left. See `README.md` for commands and `docs/SYSEX_FORMAT.md` for the wire forma
 
 A SvelteKit PWA to configure the Expert Sleepers FH-2. The **entire SysEx config
 format is reverse-engineered and modeled** (round-trip tested), and **editor UIs
-exist for the main sections**. The whole edit loop works today against a mock
-device. The one thing not yet verified is **live hardware** — that's the next
-step once the FH-2 is connected.
+exist for the main sections**. A **preset SysEx pipeline** (codec + transport,
+format v8) now also loads/edits/sends the 16 Euclidean generators. Both the
+config and the preset Euclidean loops are **hardware-verified on a live FH-2**.
 
 - Repo: `github.com/AdamWolcottSmith/fh-2-forge` (branch `main`)
-- 34 unit tests passing · `npm run check` clean · production build clean
+- 47 unit tests passing · `npm run check` clean · production build clean
+
+### Hardware verification — DONE (2026-06-28)
+Live FH-2 (firmware v2.0.0). Preset pipeline echo test passed end-to-end:
+`requestPreset` decoded the on-device preset (format **v8**, 16 generators at
+factory Init = pulses 0 / steps 16 / rate 12 — matching the captured fixture);
+editing `euclidean[4].pulses = 4` and calling `sendPreset` was **echoed back by
+the device** on re-read (PASS). Confirms decode + encode + device acceptance on
+real hardware, not just the fixture. (Config-side round-trip remains
+functionally correct; see the SRR don't-care-byte note in the design spec.)
 - Stack: SvelteKit 2 / Svelte 5 runes / TypeScript / Tailwind 4 / Vitest; PWA
   (manifest + service worker); Web MIDI; mock transport for hardware-free dev
 

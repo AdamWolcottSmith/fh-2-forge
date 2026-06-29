@@ -25,6 +25,15 @@ export const CONFIG_DUMP_HEADER = [0xf0, 0x00, 0x21, 0x27, 0x2f, 0x10, 0x00, 0x0
 /** Config-dump payload is padded to this length before the addendum + F7. */
 export const CONFIG_PAYLOAD_PAD = 4096;
 
+/** Firmware preset-format version this codec targets (distinct from config v11). */
+export const PRESET_VERSION = 8;
+
+/** The fixed 8-byte header that opens a preset-dump message. */
+export const PRESET_DUMP_HEADER = [0xf0, 0x00, 0x21, 0x27, 0x2f, 0x13, 0x00, 0x00] as const;
+
+/** Preset-dump payload length (bytes between the 8-byte header and trailing F7). */
+export const PRESET_PAYLOAD_LENGTH = 4436;
+
 /** Command bytes (the byte after FH2_FAMILY). */
 export const Command = {
 	CONFIG_DUMP: 0x10,
@@ -32,6 +41,8 @@ export const Command = {
 	SAVE_TO_FLASH: 0x18,
 	REQUEST_CONFIG: 0x21,
 	REQUEST_VERSION: 0x22,
+	PRESET_DUMP: 0x13,
+	REQUEST_PRESET: 0x23,
 	VERSION_STRING: 0x32
 } as const;
 
@@ -84,6 +95,11 @@ export function requestConfigMessage(): Uint8Array {
 	return new Uint8Array([...SYSEX_PREFIX, Command.REQUEST_CONFIG, 0xf7]);
 }
 
+/** Request a full preset dump from the device. */
+export function requestPresetMessage(): Uint8Array {
+	return new Uint8Array([...SYSEX_PREFIX, Command.REQUEST_PRESET, 0xf7]);
+}
+
 /** Request the firmware version string. */
 export function requestVersionMessage(): Uint8Array {
 	return new Uint8Array([...SYSEX_PREFIX, Command.REQUEST_VERSION, 0xf7]);
@@ -106,6 +122,7 @@ export function textMessage(text: string): Uint8Array {
 
 export type IncomingMessage =
 	| { kind: 'config'; payload: Uint8Array }
+	| { kind: 'preset'; payload: Uint8Array }
 	| { kind: 'version'; version: string }
 	| { kind: 'unknown'; command: number };
 
@@ -122,6 +139,9 @@ export function classifyMessage(data: Uint8Array): IncomingMessage | null {
 	if (command === Command.CONFIG_DUMP) {
 		// payload is between the 8-byte header and the trailing F7
 		return { kind: 'config', payload: data.slice(8, -1) };
+	}
+	if (command === Command.PRESET_DUMP) {
+		return { kind: 'preset', payload: data.slice(8, -1) };
 	}
 	if (command === Command.VERSION_STRING) {
 		const version = String.fromCharCode(...data.slice(6, -1));
@@ -143,6 +163,20 @@ export function isConfigDumpFile(bytes: Uint8Array): boolean {
 		bytes[3] === 0x27 &&
 		bytes[4] === 0x2f &&
 		bytes[5] === 0x10 &&
+		bytes[bytes.length - 1] === 0xf7
+	);
+}
+
+/** Validate that a byte blob is a preset-dump message (as written to `.syx`). */
+export function isPresetDumpFile(bytes: Uint8Array): boolean {
+	return (
+		bytes.length >= 9 &&
+		bytes[0] === 0xf0 &&
+		bytes[1] === 0x00 &&
+		bytes[2] === 0x21 &&
+		bytes[3] === 0x27 &&
+		bytes[4] === 0x2f &&
+		bytes[5] === 0x13 &&
 		bytes[bytes.length - 1] === 0xf7
 	);
 }

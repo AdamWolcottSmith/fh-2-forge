@@ -36,3 +36,16 @@ describe('MockTransport', () => {
 		expect(again.globals.triggerLength).toBe(137);
 	});
 });
+
+describe('MockTransport preset', () => {
+	it('stores and returns a sent preset', async () => {
+		const t = new MockTransport();
+		const p = await t.requestPreset();
+		p.euclidean = [
+			{ pulses: 3, steps: 8, rotation: 0, rate: 12, gateLength: 0, accent: 0, reset: 0 }
+		];
+		await t.sendPreset(p);
+		const back = await t.requestPreset();
+		expect(back.euclidean[0]?.pulses).toBe(3);
+	});
+});

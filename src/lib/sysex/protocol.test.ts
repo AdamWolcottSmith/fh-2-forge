@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
 	bytesToShort,
 	classifyMessage,
@@ -14,8 +16,15 @@ import {
 	sysexSafeSignedChar,
 	unSysexSafeShort,
 	unSysexSafeSignedChar,
-	unSysexSafeSignedShort
+	unSysexSafeSignedShort,
+	requestPresetMessage,
+	isPresetDumpFile,
+	PRESET_PAYLOAD_LENGTH
 } from './protocol';
+
+const fixtureDir = fileURLToPath(new URL('./fixtures/', import.meta.url));
+const presetSyx = new Uint8Array(readFileSync(fixtureDir + 'device-preset-v8.syx'));
+const configSyx = new Uint8Array(readFileSync(fixtureDir + 'device-dump-v11.syx'));
 
 describe('value packing', () => {
 	it('round-trips unsigned 14-bit values', () => {
@@ -87,5 +96,25 @@ describe('incoming classification', () => {
 
 	it('targets config version 11', () => {
 		expect(CONFIG_VERSION).toBe(11);
+	});
+});
+
+describe('preset framing', () => {
+	it('builds the preset request message', () => {
+		expect([...requestPresetMessage()]).toEqual([0xf0, 0x00, 0x21, 0x27, 0x2f, 0x23, 0xf7]);
+	});
+
+	it('recognises a preset dump file and rejects a config dump', () => {
+		expect(isPresetDumpFile(presetSyx)).toBe(true);
+		expect(isPresetDumpFile(configSyx)).toBe(false);
+	});
+
+	it('classifies a preset dump and extracts its payload', () => {
+		const msg = classifyMessage(presetSyx);
+		expect(msg?.kind).toBe('preset');
+		if (msg?.kind === 'preset') {
+			expect(msg.payload.length).toBe(PRESET_PAYLOAD_LENGTH);
+			expect(msg.payload.length).toBe(4436);
+		}
 	});
 });

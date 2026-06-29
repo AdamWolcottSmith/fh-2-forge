@@ -33,3 +33,22 @@ describe('preset codec — framing & round-trip', () => {
 		expect(encodePreset(p).length).toBe(4436 + 9);
 	});
 });
+
+describe('preset codec — Euclidean decode', () => {
+	it('decodes 16 generators with the factory Init values', () => {
+		const p = decodePreset(presetSyx);
+		expect(p.euclidean.length).toBe(16);
+		// Verified from the fixture: every generator is 00 10 00 0c 00 00 00 (+pad)
+		for (const g of p.euclidean) {
+			expect(g).toEqual({
+				pulses: 0,
+				steps: 16,
+				rotation: 0,
+				rate: 12,
+				gateLength: 0,
+				accent: 0,
+				reset: 0
+			});
+		}
+	});
+});

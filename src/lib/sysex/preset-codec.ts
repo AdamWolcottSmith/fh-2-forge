@@ -29,10 +29,31 @@ export interface PresetModel {
 }
 
 const OFF_NAME = 4; // 16 ASCII bytes; tool advances cursor 17
+const OFF_EUCLIDEAN = 1372; // 16 generators × 8 bytes (7 used + 1 pad)
+const EUC_STRIDE = 8;
+const EUC_COUNT = 16;
 
 /** Strip the 8-byte dump header + trailing F7 if a full message was passed. */
 function toPayload(input: Uint8Array): Uint8Array {
 	return input[0] === 0xf0 && input[5] === 0x13 ? input.slice(8, -1) : input;
+}
+
+function decodeEuclidean(payload: Uint8Array): EuclideanGenerator[] {
+	const gens: EuclideanGenerator[] = [];
+	for (let i = 0; i < EUC_COUNT; i++) {
+		const base = OFF_EUCLIDEAN + i * EUC_STRIDE;
+		gens.push({
+			pulses: payload[base + 0],
+			steps: payload[base + 1],
+			rotation: payload[base + 2],
+			rate: payload[base + 3],
+			gateLength: payload[base + 4],
+			accent: payload[base + 5],
+			reset: payload[base + 6]
+			// base + 7 is padding — preserved via raw
+		});
+	}
+	return gens;
 }
 
 export function decodePreset(input: Uint8Array): PresetModel {
@@ -48,7 +69,7 @@ export function decodePreset(input: Uint8Array): PresetModel {
 	return {
 		version,
 		name: name.replace(/\s+$/, ''),
-		euclidean: [],
+		euclidean: decodeEuclidean(payload),
 		raw: payload.slice()
 	};
 }

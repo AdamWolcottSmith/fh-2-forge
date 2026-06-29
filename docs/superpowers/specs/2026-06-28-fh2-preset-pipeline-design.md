@@ -40,8 +40,15 @@ facts already extracted from it:
 ## Goals
 
 1. Request a preset from a connected FH-2 and decode it into a typed `PresetModel`.
-2. **Byte-for-byte round-trip**: `encodePreset(decodePreset(dump)) === dump` for a real
-   hardware dump. This is the acceptance gate.
+2. **Lossless round-trip** of a real hardware dump. Two-tier acceptance gate (see the
+   "Findings" section for why strict byte-equality alone is not sufficient):
+   - **Primary — byte-for-byte:** `encodePreset(decodePreset(dump)) === dump`, achieved by
+     starting `encodePreset` from `model.raw` and overwriting only the bytes of fields we
+     actively model, leaving device-stale "don't-care" bytes untouched.
+   - **Fallback — semantic equivalence:** for any byte range the device fills
+     nondeterministically, `decodePreset(encodePreset(decodePreset(dump)))` must equal
+     `decodePreset(dump)` (same model). Any range that uses the fallback instead of
+     byte-equality is documented explicitly in the codec.
 3. Decode and re-encode the **16 Euclidean generators' fields** correctly.
 4. Send an edited preset back to the device; import/export preset `.syx` files.
 5. Keep preset state fully separate from config state (independent dirty/load/save).
@@ -63,7 +70,7 @@ Mirror the proven config stack one layer at a time. Shared primitives (5-byte pr
 | `src/lib/sysex/preset-codec.ts` | new | `codec.ts` | `decodePreset(payload) → PresetModel`, `encodePreset(model) → payload`. |
 | `src/lib/sysex/preset-transport.ts` | new | `fh2-sysex.ts` | Request / receive / send preset dumps; separate dirty state; `.syx` import/export. |
 | `src/lib/sysex/preset-codec.test.ts` | new | `codec.test.ts` | Round-trip identity gate + Euclidean field assertions against the hardware fixture. |
-| `src/lib/sysex/fixtures/device-preset-v11.syx` | new | — | Authoritative hardware-captured preset dump (see Task 0). |
+| `src/lib/sysex/fixtures/device-preset-v8.syx` | done | — | Authoritative hardware-captured preset dump (committed; see Findings). |
 
 ## The codec model — lossless by construction
 
@@ -95,7 +102,7 @@ interface EuclideanGenerator {
 }
 
 interface PresetModel {
-  version: number;            // preset format version (expect 11)
+  version: number;            // preset format version (confirmed 8 on firmware v2.0.0)
   euclidean: EuclideanGenerator[]; // length 16
   raw: Uint8Array;            // full payload, for lossless re-encode
 }
@@ -120,15 +127,37 @@ No new UI surface beyond whatever minimal dev affordance is needed to trigger
 request/send/import/export for verification (a throwaway dev button or a test harness —
 the real UI is the next spec).
 
+## Findings from the captured dumps (2026-06-28)
+
+Adam dumped both domains off the live FH-2. Fixtures are committed at
+`src/lib/sysex/fixtures/device-dump-v11.syx` (config) and `.../device-preset-v8.syx`
+(preset). Key facts that shaped this spec:
+
+- **Preset format version is 8**, not 11 (header `F0 00 21 27 2F 13 00 00`, payload[0] =
+  `0x08`). The config domain is v11 as expected. The preset codec targets **v8**, and
+  fixture/constant names use `v8`.
+- **Preset payload length = 4436 bytes** (4445 total − 8 header − 1 `F7`). Internal padding
+  / addendum structure is recovered during implementation.
+- **Strict byte-for-byte is not free — proven empirically.** Running the *existing* config
+  codec against the real `device-dump-v11.syx` round-trips the **model** perfectly (name
+  "Init", v11) but diverges on **16 bytes** in the SRR section (`OFF_SRR = 3699`, stride 7,
+  the `change` byte of each of the 16 entries). The device leaves a stale channel-index
+  value (1…16) in a byte that is semantically *ignored* because that SRR `change` input is
+  `−1` (off, flagged in the addendum); the encoder normalizes it to `0x7f`. This is the
+  reason for the two-tier gate in Goals. The preset codec must preserve such bytes by
+  starting `encode` from `model.raw` rather than re-deriving every byte. (The analogous
+  config-codec normalization is a pre-existing, *functionally harmless* quirk — out of
+  scope here, noted for a possible follow-up.)
+
 ## Validation & testing
 
-- **Task 0 — hardware capture (precondition).** Connect the FH-2 (Chrome/Edge, known-good
-  data cable — suspect charge-only cables first), request a preset dump, and save it to
-  `src/lib/sysex/fixtures/device-preset-v11.syx`. Also capture the config dump fixture we
-  still owe: `src/lib/sysex/fixtures/device-dump-v11.syx`. The codec is built against these
-  authoritative bytes — not against tool-generated guesses.
-- **Round-trip identity (the gate):** `encodePreset(decodePreset(fixture)) === fixture`,
-  byte-for-byte, mirroring `codec.test.ts`'s "preserves bytes in unmodeled regions" test.
+- **Task 0 — hardware capture: DONE.** Both dumps captured and committed to
+  `src/lib/sysex/fixtures/`. The codec is built against these authoritative bytes.
+- **Round-trip gate (two-tier, per Goals):** byte-for-byte against `device-preset-v8.syx`
+  where achievable; documented semantic-equivalence fallback for any device-stale ranges.
+  Mirrors `codec.test.ts`'s round-trip tests but runs against the **real fixture**, not
+  synthetic data (synthetic round-trips passed while the real config dump exposed the SRR
+  divergence — the real fixture is the meaningful test).
 - **Euclidean field assertions:** decode the fixture and assert specific generators' field
   values match what the official preset tool shows for the same dump (cross-checked by
   loading the same `.syx` into `fh2_preset_tool.html`).
@@ -138,9 +167,10 @@ the real UI is the next spec).
 
 - **Euclidean byte offsets** are not yet pinned — they're recovered during implementation
   from the fixture + `parsePresetDump`. Low risk: the tool source is the exact authority.
-- **Preset format version** is assumed to be `11` (matching config on firmware v2.0.0);
-  confirm from the captured dump's header. If it differs, record it and target the captured
-  version.
+- **Preset format version is confirmed 8** (from the captured dump). Resolved.
+- **Device-stale "don't-care" bytes** (per Findings) may force the semantic-equivalence
+  fallback for specific ranges. Encode must start from `model.raw` to minimize this; any
+  range that can't hit byte-equality is documented in the codec.
 - **`unSysexSafeInt` semantics** must be ported exactly from the tool (28-bit pack); verify
   against round-trip rather than by inspection.
 

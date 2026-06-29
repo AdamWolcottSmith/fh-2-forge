@@ -3,7 +3,6 @@ import { createDefaultConfig } from '$lib/config/defaults';
 import { FH2_LIMITS, OUTPUT_COUNT } from '$lib/types/fh2';
 import { MockTransport } from './fh2-sysex';
 
-
 describe('default config', () => {
 	it('populates the documented entity counts', () => {
 		const c = createDefaultConfig();

@@ -9,7 +9,7 @@
  * `encodePreset` starts from `model.raw` and overwrites only the Euclidean bytes,
  * so every unmodeled byte survives a load->edit->send cycle untouched.
  */
-import { PRESET_DUMP_HEADER, PRESET_PAYLOAD_LENGTH, PRESET_VERSION } from './protocol';
+import { isPresetDumpFile, PRESET_DUMP_HEADER, PRESET_PAYLOAD_LENGTH, PRESET_VERSION } from './protocol';
 
 export interface EuclideanGenerator {
 	pulses: number;
@@ -22,7 +22,9 @@ export interface EuclideanGenerator {
 }
 
 export interface PresetModel {
+	/** Decoded for inspection only — NOT re-encoded; edits won't persist (carried via `raw`). */
 	version: number;
+	/** Decoded for inspection only — NOT re-encoded; edits won't persist (carried via `raw`). */
 	name: string;
 	euclidean: EuclideanGenerator[];
 	raw: Uint8Array;
@@ -35,7 +37,7 @@ const EUC_COUNT = 16;
 
 /** Strip the 8-byte dump header + trailing F7 if a full message was passed. */
 function toPayload(input: Uint8Array): Uint8Array {
-	return input[0] === 0xf0 && input[5] === 0x13 ? input.slice(8, -1) : input;
+	return isPresetDumpFile(input) ? input.slice(8, -1) : input;
 }
 
 function decodeEuclidean(payload: Uint8Array): EuclideanGenerator[] {
@@ -57,7 +59,7 @@ function decodeEuclidean(payload: Uint8Array): EuclideanGenerator[] {
 }
 
 function encodeEuclidean(gens: EuclideanGenerator[], payload: Uint8Array): void {
-	gens.forEach((g, i) => {
+	gens.slice(0, EUC_COUNT).forEach((g, i) => {
 		const base = OFF_EUCLIDEAN + i * EUC_STRIDE;
 		payload[base + 0] = g.pulses & 0x7f;
 		payload[base + 1] = g.steps & 0x7f;
